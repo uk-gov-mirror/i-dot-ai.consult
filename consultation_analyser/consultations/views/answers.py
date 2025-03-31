@@ -353,6 +353,43 @@ def show(
 
 
 @user_can_see_consultation
+def skip_to_next(
+    request: HttpRequest, consultation_slug: str, question_slug: str, themefinder_id: int
+):
+    consultation = get_object_or_404(models.Consultation, slug=consultation_slug)
+    question = get_object_or_404(models.Question, slug=question_slug, consultation=consultation)
+    question_part = get_object_or_404(
+        models.QuestionPart, question=question, type=models.QuestionPart.QuestionType.FREE_TEXT
+    )
+
+    next_response = (
+        models.Answer.objects.filter(
+            question_part=question_part,
+            is_theme_mapping_audited=False,
+            respondent__themefinder_respondent_id__gt=themefinder_id,
+        )
+        .order_by("respondent__themefinder_respondent_id")
+        .first()
+    )
+
+    if next_response:
+        return redirect(
+            "show_response",
+            consultation_slug=consultation_slug,
+            question_slug=question_slug,
+            response_id=next_response.id,
+        )
+
+    # If no next response, show no responses page
+    context = {
+        "consultation_name": consultation.title,
+        "consultation_slug": consultation_slug,
+        "question": question,
+    }
+    return render(request, "consultations/answers/no_responses.html", context)
+
+
+@user_can_see_consultation
 def show_next(request: HttpRequest, consultation_slug: str, question_slug: str):
     consultation = get_object_or_404(models.Consultation, slug=consultation_slug)
     question = get_object_or_404(models.Question, slug=question_slug, consultation=consultation)

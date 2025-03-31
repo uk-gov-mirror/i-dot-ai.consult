@@ -73,11 +73,19 @@
         <button type="submit" class="govuk-button" data-module="govuk-button" data-govuk-button-init="">
           Save and continue to a new response
         </button>
-        <button class="govuk-button govuk-button--secondary" data-module="govuk-button" data-govuk-button-init=""
-          formaction="{{ url('show_next_response', kwargs={'question_slug': question.slug, 'consultation_slug': consultation_slug}) }}"
-          formmethod="get">
-          Skip this response
-        </button>
+        {% if response.respondent.themefinder_respondent_id or response.respondent.themefinder_respondent_id == 0 %}
+          <button class="govuk-button govuk-button--secondary" data-module="govuk-button" data-govuk-button-init=""
+            formaction="{{ url('skip_to_next_response', kwargs={'question_slug': question.slug, 'consultation_slug': consultation_slug, 'themefinder_id': response.respondent.themefinder_respondent_id}) }}"
+            formmethod="get">
+            Skip this response
+          </button>
+        {% else %}
+          <button class="govuk-button govuk-button--secondary" data-module="govuk-button" data-govuk-button-init=""
+            formaction="{{ url('show_next_response', kwargs={'question_slug': question.slug, 'consultation_slug': consultation_slug}) }}"
+            formmethod="get">
+            Skip this response
+          </button>
+        {% endif %}
       </div>
 
     </form>

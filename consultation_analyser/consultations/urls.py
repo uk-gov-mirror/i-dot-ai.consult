@@ -28,6 +28,11 @@ urlpatterns = [
         name="show_next_response",
     ),
     path(
+        "consultations/<str:consultation_slug>/responses/<str:question_slug>/<int:themefinder_id>/skip-to-next/",
+        answers.skip_to_next,
+        name="skip_to_next_response",
+    ),
+    path(
         "consultations/<str:consultation_slug>/responses/<str:question_slug>/<uuid:response_id>/",
         answers.show,
         name="show_response",
