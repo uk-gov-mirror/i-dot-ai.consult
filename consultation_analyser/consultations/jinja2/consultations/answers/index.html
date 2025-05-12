@@ -126,14 +126,14 @@
             },
           {% endfor %}
         ],
-        
+
         {% if respondent.multiple_choice_answer and respondent.multiple_choice_answer.chosen_options %}
           multiple_choice_answer: {{ respondent.multiple_choice_answer.chosen_options | safe }},
         {% else %}
           multiple_choice_answer: [],
         {% endif %}
 
-        evidenceRich: {% if respondent.evidence_rich.evidence_rich %}true{% else %}false{% endif %},
+        evidenceRich: {% if respondent.evidence_rich and respondent.evidence_rich.evidence_rich %}true{% else %}false{% endif %},
         individual: {% if respondent.individual %}true{% else %}false{% endif %},
       },
     {% endfor %}
