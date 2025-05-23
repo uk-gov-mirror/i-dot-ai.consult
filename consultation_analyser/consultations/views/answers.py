@@ -216,7 +216,8 @@ def respondents_json(
                 # Can assume at most one sentiment mapping
                 respondent.sentiment = free_text_answer.prefetched_sentimentmappings[0]  # type: ignore
 
-            if len(free_text_answer.prefetched_evidencerichmappings) > 0:
+            if free_text_answer.prefetched_evidencerichmappings:
+                # Can assume at most one evidence rich mapping
                 respondent.evidence_rich = free_text_answer.prefetched_evidencerichmappings[0]  # type: ignore
 
         # Multiple choice response
