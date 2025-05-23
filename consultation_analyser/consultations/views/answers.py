@@ -226,7 +226,7 @@ def respondents_json(
             if answer.question_part.type == models.QuestionPart.QuestionType.MULTIPLE_OPTIONS
         ]
 
-        if len(multiple_choice_answers) > 0:
+        if multiple_choice_answers:
             respondent.multiple_choice_answer = multiple_choice_answers[0]
 
         # Build JSON response
