@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404, render
 
 from consultation_analyser.consultations.models import (
     ConsultationOld,
+    Consultation,
     QuestionOld,
     QuestionPart,
     SentimentMapping,
@@ -22,7 +23,7 @@ logger = logging.getLogger("upload")
 
 def index(request: HttpRequest) -> HttpResponse:
     user = request.user
-    consultations_for_user = ConsultationOld.objects.filter(users=user)
+    consultations_for_user = Consultation.objects.filter(users=user)
     context = {
         "consultations": consultations_for_user,
         "user_has_dashboard_access": user.has_dashboard_access,
