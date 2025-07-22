@@ -1,15 +1,22 @@
 from collections import defaultdict
 from datetime import datetime
-from typing import TypedDict
+from logging import getLogger
+from typing import Literal, TypedDict
 from uuid import UUID
 
+from django.contrib.postgres.search import SearchQuery, SearchRank
+from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
-from django.db.models import Count, Exists, OuterRef, Prefetch, Q
+from django.db.models import Count, Q, QuerySet
 from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from pgvector.django import CosineDistance
 
+from ...embeddings import embed_text
 from .. import models
 from .decorators import user_can_see_consultation, user_can_see_dashboards
+
+logger = getLogger(__file__)
 
 
 class DataDict(TypedDict):
@@ -26,10 +33,11 @@ class FilterParams(TypedDict, total=False):
     sentiment_list: list[str]
     theme_list: list[str]
     evidence_rich: bool
+    search_mode: Literal["semantic", "keyword"]
+    demo_filters: dict[str, str]
     search_value: str
-    demographic_filters: dict[
-        str, list[str]
-    ]  # e.g. {"individual": ["true"], "region": ["north", "south"]}
+    themes_sort_type: str  # "frequency" or "alphabetical"
+    themes_sort_direction: str  # "ascending" or "descending"
 
 
 def parse_filters_from_request(request: HttpRequest) -> FilterParams:
@@ -44,27 +52,39 @@ def parse_filters_from_request(request: HttpRequest) -> FilterParams:
     if theme_filters:
         filters["theme_list"] = theme_filters.split(",")
 
-    evidence_rich_filter = request.GET.get("evidenceRichFilter")
-    if evidence_rich_filter == "evidence-rich":
+    themes_sort_direction = request.GET.get("themesSortDirection", "")
+    if themes_sort_direction in ["ascending", "descending"]:
+        filters["themes_sort_direction"] = themes_sort_direction
+
+    themes_sort_type = request.GET.get("themesSortType", "")
+    if themes_sort_type in ["frequency", "alphabetical"]:
+        filters["themes_sort_type"] = themes_sort_type
+
+    evidence_rich_filter = request.GET.get("evidenceRich")
+    if evidence_rich_filter:
         filters["evidence_rich"] = True
 
     search_value = request.GET.get("searchValue")
     if search_value:
         filters["search_value"] = search_value
 
-    # Parse demographic filters
-    # Expected format: demographicFilters[field]=value1,value2
-    demographic_filters = {}
-    for key in request.GET:
-        if key.startswith("demographicFilters[") and key.endswith("]"):
-            field_name = key[19:-1]  # Extract field name from demographicFilters[fieldname]
-            values = request.GET.get(key, "").split(",")
-            if values and values[0]:  # Only add if there are actual values
-                demographic_filters[field_name] = values
+    search_mode = request.GET.get("searchMode")
+    if search_mode:
+        if search_mode not in ("semantic", "keyword"):
+            raise ValidationError("search mode must be one of semantic, keyword")
+        filters["search_mode"] = search_mode
 
-    if demographic_filters:
-        filters["demographic_filters"] = demographic_filters
+    # Expected format - `demoFilters=age:18&demoFilters=country:england`
+    demo_filters = request.GET.getlist("demoFilters")
 
+    def split(txt):
+        # ignores consecutive colons
+        # TODO: remove this in favour of DRF
+        return tuple(filter(None, txt.split(":")))
+
+    if demo_filters:
+        filters_dict = dict(map(split, demo_filters))
+        filters["demo_filters"] = filters_dict
     return filters
 
 
@@ -78,29 +98,26 @@ def build_response_filter_query(filters: FilterParams, question: models.Question
     if filters.get("evidence_rich"):
         query &= Q(annotation__evidence_rich=models.ResponseAnnotation.EvidenceRich.YES)
 
-    if filters.get("search_value"):
-        query &= Q(free_text__icontains=filters["search_value"])
-
     # Handle demographic filters
-    if filters.get("demographic_filters"):
-        for field, values in filters["demographic_filters"].items():
-            # Create a Q object that matches any of the values for this field
+    demo_filters = filters.get("demo_filters")
+    if demo_filters := filters.get("demo_filters"):
+        for field, value in demo_filters.items():
             field_query = Q()
-            for value in values:
-                # Handle boolean values
-                if value.lower() in ["true", "false"]:
-                    bool_value = value.lower() == "true"
-                    field_query |= Q(**{f"respondent__demographics__{field}": bool_value})
-                else:
-                    # Handle string values
-                    field_query |= Q(**{f"respondent__demographics__{field}": value})
+            # Handle boolean values
+            if value.lower() in ["true", "false"]:
+                bool_value = value.lower() == "true"
+                field_query |= Q(**{f"respondent__demographics__{field}": bool_value})
+            else:
+                # Handle string values
+                field_query |= Q(**{f"respondent__demographics__{field}": value})
             query &= field_query
 
     return query
 
 
 def get_filtered_responses_with_themes(
-    question: models.Question, filters: FilterParams | None = None
+    question: models.Question,
+    filters: FilterParams | None = None,
 ):
     """Single optimized query to get all filtered responses with their themes"""
     response_filter = build_response_filter_query(filters or {}, question)
@@ -108,44 +125,82 @@ def get_filtered_responses_with_themes(
         models.Response.objects.filter(response_filter)
         .select_related("respondent", "annotation")
         .prefetch_related("annotation__themes")
+        .only(
+            # Response fields
+            "id",
+            "respondent_id",
+            "question_id",
+            "free_text",
+            "chosen_options",
+            "created_at",
+            # Respondent fields
+            "respondent__id",
+            "respondent__themefinder_id",
+            "respondent__demographics",
+            # Annotation fields
+            "annotation__id",
+            "annotation__sentiment",
+            "annotation__evidence_rich",
+        )
+        .defer("embedding", "search_vector")
     )
 
-    # Handle theme filtering with AND logic
     if filters and filters.get("theme_list"):
-        # Create subqueries for each theme
-        for theme_id in filters["theme_list"]:
-            theme_exists = models.ResponseAnnotationTheme.objects.filter(
-                response_annotation__response=OuterRef("pk"), theme_id=theme_id
-            )
-            queryset = queryset.filter(Exists(theme_exists))
+        theme_ids = filters["theme_list"]
+        # Use single JOIN with HAVING clause for AND logic
+        queryset = (
+            queryset.filter(annotation__themes__id__in=theme_ids)
+            .annotate(matched_theme_count=Count("annotation__themes", distinct=True))
+            .filter(matched_theme_count=len(theme_ids))
+        )
 
-    return queryset.distinct().order_by("created_at")  # Consistent ordering for pagination
+    if filters and filters.get("search_value"):
+        search_query = SearchQuery(filters["search_value"])
+
+        if filters.get("search_mode") == "semantic":
+            # semantic_distance: exact match = 0, exact opposite = 2
+            embedded_query = embed_text(filters["search_value"])
+            distance = CosineDistance("embedding", embedded_query)
+            return queryset.annotate(distance=distance).order_by("distance")
+        else:
+            # term_frequency: exact match = 1+, no match = 0
+            # normalization = 1: divides the rank by 1 + the logarithm of the document length
+            distance = SearchRank("search_vector", search_query, normalization=1)
+            return (
+                queryset.filter(search_vector=search_query)
+                .annotate(distance=distance)
+                .order_by("-distance")
+            )
+
+    return queryset.order_by("created_at")  # Consistent ordering for pagination
 
 
 def get_theme_summary_optimized(
-    question: models.Question, filters: FilterParams | None = None
+    question: models.Question,
+    filtered_responses: QuerySet | None = None,
+    themes_sort_type: str | None = None,
+    themes_sort_direction: str | None = None,
 ) -> list[dict]:
     """Database-optimized theme aggregation - shows all themes in filtered responses"""
-    # Get the filtered responses using the same logic as get_filtered_responses_with_themes
-    response_filter = build_response_filter_query(filters or {}, question)
-    filtered_responses = models.Response.objects.filter(response_filter)
+    # Empty queryset would be valid, explicitly check for None
+    if filtered_responses is None:
+        filtered_responses = models.Response.objects.filter(question=question)
 
-    # Apply theme filtering with AND logic if needed
-    if filters and filters.get("theme_list"):
-        # Create subqueries for each theme
-        for theme_id in filters["theme_list"]:
-            theme_exists = models.ResponseAnnotationTheme.objects.filter(
-                response_annotation__response=OuterRef("pk"), theme_id=theme_id
-            )
-            filtered_responses = filtered_responses.filter(Exists(theme_exists))
+    # Ordering of responses - default to order by frequency, descengind
+    order_by_field_name = "response_count"
+    direction = "-"
+    if themes_sort_type == "alphabetical":
+        order_by_field_name = "name"
+    if themes_sort_direction == "ascending":
+        direction = ""
 
     # Now get all themes that appear in those filtered responses
     # This shows ALL themes that appear in responses matching the filter criteria
     theme_data = (
         models.Theme.objects.filter(responseannotation__response__in=filtered_responses)
-        .annotate(response_count=Count("responseannotation__response", distinct=True))
+        .annotate(response_count=Count("responseannotation__response"))
         .values("id", "name", "description", "response_count")
-        .order_by("-response_count")
+        .order_by(f"{direction}{order_by_field_name}")
     )
 
     return [
@@ -159,14 +214,12 @@ def get_theme_summary_optimized(
     ]
 
 
-def build_respondent_data(respondent: models.Respondent, response: models.Response) -> dict:
+def build_respondent_data(response: models.Response) -> dict:
     """Extract respondent data building to separate function"""
     data = {
-        "id": f"response-{respondent.identifier}",
-        "identifier": str(respondent.identifier),
-        "sentiment_position": "",
+        "identifier": str(response.respondent.identifier),
         "free_text_answer_text": response.free_text or "",
-        "demographic_data": respondent.demographics or {},
+        "demographic_data": response.respondent.demographics or {},
         "themes": [],
         "multiple_choice_answer": response.chosen_options or [],
         "evidenceRich": False,
@@ -175,9 +228,6 @@ def build_respondent_data(respondent: models.Respondent, response: models.Respon
     if hasattr(response, "annotation") and response.annotation:
         annotation = response.annotation
 
-        if annotation.sentiment:
-            data["sentiment_position"] = annotation.sentiment
-
         if annotation.evidence_rich == models.ResponseAnnotation.EvidenceRich.YES:
             data["evidenceRich"] = True
 
@@ -185,7 +235,6 @@ def build_respondent_data(respondent: models.Respondent, response: models.Respon
         data["themes"] = [
             {
                 "id": theme.id,
-                "stance": None,  # Stance is no longer stored in new models
                 "name": theme.name,
                 "description": theme.description,
             }
@@ -223,9 +272,9 @@ def derive_option_summary_from_responses(responses) -> list[dict]:
     return [option_counts] if option_counts else []
 
 
-def get_demographic_aggregations_from_responses(filtered_responses) -> dict[str, dict[str, int]]:
+def get_demographic_aggregations_from_responses(filtered_respondents) -> dict[str, dict[str, int]]:
     """Aggregate demographic data for filtered responses using efficient database queries"""
-    respondent_ids = filtered_responses.values_list("respondent_id", flat=True).distinct()
+    respondent_ids = filtered_respondents.values_list("respondent_id", flat=True).distinct()
 
     # Fetch all demographic data for these respondents in one query
     respondents_data = models.Respondent.objects.filter(id__in=respondent_ids).values_list(
@@ -250,9 +299,6 @@ def question_responses_json(
     consultation_slug: str,
     question_slug: str,
 ):
-    page_size = request.GET.get("page_size")
-    page = request.GET.get("page", 1)
-
     # Get the question object with consultation in one query
     question = get_object_or_404(
         models.Question.objects.select_related("consultation"),
@@ -263,14 +309,34 @@ def question_responses_json(
     # Parse filters from request
     filters = parse_filters_from_request(request)
 
+    # Get respondents with their filtered responses and produce a lightweight respondent queryset
+    full_qs = get_filtered_responses_with_themes(question, filters)
+    respondent_qs = full_qs.only("id", "respondent_id")
+
+    # Efficient counting using database aggregation
+    filtered_total = respondent_qs.count()
+    all_respondents_count = models.Response.objects.filter(question=question).count()
+
+    # Get demographic options for this consultation
+    demographic_options = get_demographic_options(question.consultation)
+
+    # Get demographic aggregations for filtered responses
+    demographic_aggregations = get_demographic_aggregations_from_responses(respondent_qs)
+
     # Generate theme mappings
     theme_mappings = []
+    themes_sort_type = filters.get("themes_sort_type")
+    themes_sort_direction = filters.get("themes_sort_direction")
     if question.has_free_text:
         # Generate theme mappings using optimized database query
-        theme_data = get_theme_summary_optimized(question, filters)
+        theme_data = get_theme_summary_optimized(
+            question=question,
+            filtered_responses=respondent_qs,
+            themes_sort_type=themes_sort_type,
+            themes_sort_direction=themes_sort_direction,
+        )
         theme_mappings = [
             {
-                "inputId": f"themesfilter-{i}",
                 "value": str(theme.get("theme__id", "")),
                 "label": theme.get("theme__name", ""),
                 "description": theme.get("theme__description", ""),
@@ -279,66 +345,33 @@ def question_responses_json(
             for i, theme in enumerate(theme_data)
         ]
 
-    # Get respondents with their filtered responses using the same logic as theme filtering
-    # First get the filtered responses using AND logic for themes
-    filtered_responses = get_filtered_responses_with_themes(question, filters)
+    # Pagination
+    DEFAULT_PAGE_SIZE = 50
+    DEFAULT_PAGE = 1
+    page_size = request.GET.get("page_size", DEFAULT_PAGE_SIZE)
+    page_num = request.GET.get("page", DEFAULT_PAGE)
 
-    # Then get respondents who have these filtered responses
-    filtered_respondents = (
-        models.Respondent.objects.filter(response__in=filtered_responses)
-        .prefetch_related(
-            Prefetch(
-                "response_set",
-                queryset=filtered_responses.select_related("annotation").prefetch_related(
-                    "annotation__themes"
-                ),
-                to_attr="filtered_responses",
-            )
-        )
-        .distinct()
-        .order_by("pk")
-    )
+    # Use Django's lazy pagination - avoids counting all results
+    paginator = Paginator(full_qs, page_size, allow_empty_first_page=True)
+    page_obj = paginator.page(page_num)
+    page_qs = page_obj.object_list
 
-    # Efficient counting using database aggregation
-    filtered_total = filtered_respondents.count()
-    all_respondents_count = models.Response.objects.filter(question=question).aggregate(
-        count=Count("respondent_id", distinct=True)
-    )["count"]
-
-    # Get demographic options for this consultation
-    demographic_options = get_demographic_options(question.consultation)
-
-    # Get demographic aggregations for filtered responses
-    demographic_aggregations = get_demographic_aggregations_from_responses(filtered_responses)
+    # Only count when necessary (first page or when specifically needed)
+    if page_num == DEFAULT_PAGE:
+        filtered_total = respondent_qs.count()
+    else:
+        # For other pages, use paginator's optimized count
+        filtered_total = paginator.count
 
     data: DataDict = {
-        "all_respondents": [],
-        "has_more_pages": False,
+        "all_respondents": [build_respondent_data(r) for r in page_qs],
+        "has_more_pages": page_obj.has_next(),
         "respondents_total": all_respondents_count,
         "filtered_total": filtered_total,
         "theme_mappings": theme_mappings,
         "demographic_options": demographic_options,
         "demographic_aggregations": demographic_aggregations,
     }
-
-    # Pagination
-    if page_size:
-        pagination = Paginator(filtered_respondents, page_size)
-        current_page = pagination.page(page)
-        respondents = current_page.object_list
-        data["has_more_pages"] = current_page.has_next()
-    else:
-        respondents = filtered_respondents
-
-    # Build response data efficiently using prefetched data
-    for respondent in respondents:
-        # Use prefetched filtered_responses
-        response = respondent.filtered_responses[0] if respondent.filtered_responses else None
-        if not response:
-            continue
-
-        respondent_data = build_respondent_data(respondent, response)
-        data["all_respondents"].append(respondent_data)
 
     return JsonResponse(data)
 

@@ -1,4 +1,7 @@
+from unittest.mock import patch
+
 import pytest
+from django.conf import settings
 from django.contrib.auth.models import Group
 from django.test import RequestFactory
 
@@ -37,7 +40,12 @@ def question(consultation):
 
 @pytest.fixture()
 def theme(question):
-    return ThemeFactory(question=question)
+    return ThemeFactory(question=question, name="Theme A", key="A")
+
+
+@pytest.fixture()
+def theme2(question):
+    return ThemeFactory(question=question, name="Theme B", key="B")
 
 
 @pytest.fixture()
@@ -72,10 +80,11 @@ def test_parse_filters_from_request_all_filters(request_factory):
         {
             "sentimentFilters": "AGREEMENT,DISAGREEMENT",
             "themeFilters": "1,2,3",
-            "evidenceRichFilter": "evidence-rich",
+            "evidenceRich": "true",
             "searchValue": "test search",
-            "demographicFilters[individual]": "true,false",
-            "demographicFilters[region]": "north,south",
+            "demoFilters": ["individual:true", "UK region:south", "Do+you+live+in::England"],
+            "themesSortDirection": "ascending",
+            "themesSortType": "frequency",
         },
     )
     filters = parse_filters_from_request(request)
@@ -84,8 +93,11 @@ def test_parse_filters_from_request_all_filters(request_factory):
     assert filters["theme_list"] == ["1", "2", "3"]
     assert filters["evidence_rich"]
     assert filters["search_value"] == "test search"
-    assert filters["demographic_filters"]["individual"] == ["true", "false"]
-    assert filters["demographic_filters"]["region"] == ["north", "south"]
+    assert filters["demo_filters"]["individual"] == "true"
+    assert filters["demo_filters"]["UK region"] == "south"
+    assert filters["demo_filters"]["Do+you+live+in"] == "England"
+    assert filters["themes_sort_direction"] == "ascending"
+    assert filters["themes_sort_type"] == "frequency"
 
 
 @pytest.mark.django_db
@@ -102,7 +114,7 @@ def test_build_response_filter_query_basic(question):
 @pytest.mark.django_db
 def test_build_response_filter_query_demographic_filters(question):
     """Test building filter query with demographic filters"""
-    filters = {"demographic_filters": {"individual": ["true"], "region": ["north", "south"]}}
+    filters = {"demo_filters": {"individual": "true", "region": "north"}}
     query = build_response_filter_query(filters, question)
 
     # Should include demographic filters
@@ -191,7 +203,7 @@ def test_get_theme_summary_optimized_no_responses(question):
 
 
 @pytest.mark.django_db
-def test_get_theme_summary_optimized_with_responses(question, theme):
+def test_get_theme_summary_optimized_with_responses(question, theme, theme2):
     """Test theme summary with responses and themes"""
     # Create respondents and responses
     respondent1 = RespondentFactory(consultation=question.consultation)
@@ -205,15 +217,30 @@ def test_get_theme_summary_optimized_with_responses(question, theme):
     annotation1.add_original_ai_themes([theme])
 
     annotation2 = ResponseAnnotationFactoryNoThemes(response=response2)
-    annotation2.add_original_ai_themes([theme])
+    annotation2.add_original_ai_themes([theme, theme2])
 
     theme_summary = get_theme_summary_optimized(question)
-
     # Find our specific theme in the results
     our_theme = next((t for t in theme_summary if t["theme__id"] == theme.id), None)
     assert our_theme is not None
     assert our_theme["theme__name"] == theme.name
     assert our_theme["count"] == 2
+
+    # Now test with filters - Theme B assigned to 1 response, Theme A assigned to 2 responses
+    theme_summary = get_theme_summary_optimized(
+        question=question, themes_sort_type="frequency", themes_sort_direction="ascending"
+    )
+    theme_summary[0]["theme__name"] = theme2.name
+    theme_summary = get_theme_summary_optimized(question=question, themes_sort_type="frequency")
+    theme_summary[0]["theme__name"] = theme.name
+    theme_summary = get_theme_summary_optimized(
+        question=question, themes_sort_type="alphabetical", themes_sort_direction="ascending"
+    )
+    theme_summary[1]["theme__name"] = theme2.name
+    theme_summary = get_theme_summary_optimized(
+        question=question, themes_sort_type="alphabetical", themes_sort_direction="descending"
+    )
+    theme_summary[0]["theme__name"] = theme2.name
 
 
 @pytest.mark.django_db
@@ -264,7 +291,7 @@ def test_question_responses_json_with_demographic_filters(client, consultation_u
     client.force_login(consultation_user)
     response = client.get(
         f"/consultations/{question.consultation.slug}/responses/{question.slug}/json/"
-        "?demographicFilters[individual]=true"
+        "?demoFilters=individual:true"
     )
 
     assert response.status_code == 200
@@ -356,7 +383,7 @@ def test_get_filtered_responses_with_themes_with_filters(question):
     ResponseFactory(question=question, respondent=respondent2)
 
     # Test with demographic filter
-    filters = {"demographic_filters": {"individual": ["true"]}}
+    filters = {"demo_filters": {"individual": "true"}}
     responses = get_filtered_responses_with_themes(question, filters)
 
     assert responses.count() == 1
@@ -521,7 +548,11 @@ def test_theme_filtering_and_logic(question):
     # When filtering by theme1 AND theme2, the theme summary should show counts
     # only for themes appearing in responses that have BOTH theme1 AND theme2
     filters = {"theme_list": [str(theme1.id), str(theme2.id)]}
-    theme_summary = get_theme_summary_optimized(question, filters)
+    # TODO - get responses
+    filtered_responses = get_filtered_responses_with_themes(question=question, filters=filters)
+    theme_summary = get_theme_summary_optimized(
+        question=question, filtered_responses=filtered_responses
+    )
 
     # Convert to dict for easier testing
     theme_counts = {t["theme__id"]: t["count"] for t in theme_summary}
@@ -533,6 +564,53 @@ def test_theme_filtering_and_logic(question):
     assert theme_counts[theme1.id] == 2
     assert theme_counts[theme2.id] == 2
     assert theme_counts[theme3.id] == 1
+
+
+@pytest.mark.django_db
+@patch("consultation_analyser.consultations.views.answers.embed_text")
+def test_semantic_search(fake_embed_text, consultation, question):
+    filters = {"search_value": "i am a question", "search_mode": "semantic"}
+
+    v1 = list(0 for _ in range(settings.EMBEDDING_DIMENSION))
+    v1[0] = 1
+
+    v2 = list(0 for _ in range(settings.EMBEDDING_DIMENSION))
+    v2[0] = -1
+
+    v3 = list(0 for _ in range(settings.EMBEDDING_DIMENSION))
+    v3[1] = 1
+
+    ResponseFactory(question=question, free_text="exact match", embedding=v1)
+    ResponseFactory(question=question, free_text="opposite", embedding=v2)
+    ResponseFactory(question=question, free_text="orthogonal", embedding=v3)
+
+    fake_embed_text.return_value = v1
+
+    responses = get_filtered_responses_with_themes(question, filters)
+    assert [x.free_text for x in responses] == ["exact match", "orthogonal", "opposite"]
+    assert [x.distance for x in responses] == [0, 1, 2]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("search_mode", ["keyword", None])
+def test_lexical_search(search_mode, consultation, question):
+    filters = {"search_value": "mary lambs", "search_mode": search_mode}
+
+    texts = [
+        "Mary had a little lamb, His fleece was white as snow, And everywhere that Mary went, The lamb was sure to go",
+        "He followed her to school one day, Which was against the rule, It made the children laugh and play, To see a lamb at school.",
+        "And so the teacher turned him out, But still he lingered near, And waited patiently about, Till Mary did appear.",
+        "What makes the lamb love Mary so? The eager children cry; Why, Mary loves the lamb, you know, The teacher did reply.",
+    ]
+
+    ResponseFactory(question=question, free_text=texts[0])
+    ResponseFactory(question=question, free_text=texts[1])
+    ResponseFactory(question=question, free_text=texts[2])
+    ResponseFactory(question=question, free_text=texts[3])
+
+    responses = get_filtered_responses_with_themes(question, filters)
+    assert [texts.index(x.free_text) for x in responses] == [0, 3]
+    assert [x.distance for x in responses] == [0.02022521, 0.014059309]
 
 
 @pytest.mark.django_db
@@ -746,15 +824,13 @@ def test_build_respondent_data():
         response=response, themes=[theme], sentiment="AGREEMENT", evidence_rich="YES"
     )
 
-    actual = build_respondent_data(respondent=respondent, response=response)
+    actual = build_respondent_data(response=response)
     expected = {
-        "id": "response-5",
-        "identifier": "5",
-        "sentiment_position": "AGREEMENT",
+        "identifier": str(respondent.identifier),
         "free_text_answer_text": "Response 1",
         "demographic_data": respondent.demographics or {},
         "themes": [
-            {"id": theme.id, "stance": None, "name": "Theme A", "description": theme.description}
+            {"id": theme.id, "name": "Theme A", "description": theme.description}
         ],
         "multiple_choice_answer": [],
         "evidenceRich": True,

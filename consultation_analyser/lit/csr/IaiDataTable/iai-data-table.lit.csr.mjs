@@ -8,6 +8,7 @@ export default class IaiDataTable extends IaiLitBase {
         ...IaiLitBase.properties,
         data: { type: Array },
         initialSorts: { type: Array },
+        sortable: { type: Boolean },
         _sortedData: { type: Array },
         _sorts: { type: Array },
     }
@@ -63,6 +64,13 @@ export default class IaiDataTable extends IaiLitBase {
             iai-data-table thead .header-button.ascending iai-icon {
                 transform: rotateX(180deg);
             }
+            iai-data-table tr.clickable-row {
+                cursor: pointer;
+                transition: background 0.3s ease-in-out;
+            }
+            iai-data-table tr.clickable-row:hover {
+                background: rgba(0, 0, 0, 0.05);
+            }
         `
     ]
 
@@ -72,10 +80,11 @@ export default class IaiDataTable extends IaiLitBase {
 
         // These will not appear as column
         // as they merely act as flags for the row
-        this._RESERVED_KEYS = ["_bottomRow", "_sortValues"];
+        this._RESERVED_KEYS = ["_bottomRow", "_sortValues", "_handleClick"];
 
         // Prop defaults
         this.data = [];
+        this.sortable = true;
         this._sorts = [];
         this._sortedData = [];
     }
@@ -197,47 +206,66 @@ export default class IaiDataTable extends IaiLitBase {
         return this._sorts[currentSortIndex].ascending ? "ascending" : "descending";
     }
 
+    renderHeader = (header) => {
+        if (!this.sortable) {
+            return html`
+                <th
+                    scope="col"
+                    class="govuk-table__header"
+                >
+                    <h3>${header}</h3>
+                </th>
+            `
+        }
+        return html`
+            <th
+                style="" scope="col" class="govuk-table__header"
+                class=${"header-button " + this.getCurrentSortDirection(header)}
+                role="button"
+                aria-sort=${this.getCurrentSortDirection(header)}
+                aria-label=${this.getCurrentSortDirection(header)
+                    ? `Sorted by "${header}" in ${this.getCurrentSortDirection(header)} order. Click to sort in reverse.`
+                    : `Click to sort by "${header}" in ascending order`
+                }
+                tabindex=0
+                @click=${() => this.updateSorts(header)}
+                @keydown=${(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        this.updateSorts(header);
+                    }
+                }}
+            >
+                <h3>${header}</h3>
+                <iai-icon
+                    name="sort"
+                    .color=${"var(--iai-colour-text-secondary)"}
+                    .fill=${0}
+                ></iai-icon>
+            </th>
+        `
+    }
+
     render() {
+        const data = this.sortable ? this._sortedData : this.data;
+
         return html`
             <table class="govuk-table govuk-body" mentionstable="">
                 <thead class="govuk-table__head">
                     <tr class="govuk-table__row">    
-                        ${this.getHeaders().map(header => html`
-                            <th
-                                style="" scope="col" class="govuk-table__header"
-                                class=${"header-button " + this.getCurrentSortDirection(header)}
-                                    role="button"
-                                    aria-sort=${this.getCurrentSortDirection(header)}
-                                    aria-label=${this.getCurrentSortDirection(header)
-                                        ? `Sorted by "${header}" in ${this.getCurrentSortDirection(header)} order. Click to sort in reverse.`
-                                        : `Click to sort by "${header}" in ascending order`
-                                    }
-                                    tabindex=0
-                                    @click=${() => this.updateSorts(header)}
-                                    @keydown=${(e) => {
-                                        if (e.key === "Enter" || e.key === " ") {
-                                            e.preventDefault();
-                                            this.updateSorts(header);
-                                        }
-                                    }}
-                            >
-                                <h3>${header}</h3>
-                                <iai-icon
-                                    name="sort"
-                                    .color=${"var(--iai-colour-text-secondary)"}
-                                    .fill=${0}
-                                ></iai-icon>
-                            </th>
-                        `)}
+                        ${this.getHeaders().map(header => this.renderHeader(header))}
                     </tr>
                 </thead>
           
                 <tbody class="govuk-table__body">
-                    ${this._sortedData.map(row => html`
-                        <tr class=${
-                            "govuk-table__row" +
-                            (row._bottomRow ? " bottom-row" : "")
-                        }>
+                    ${data.map(row => html`
+                        <tr
+                            class=${"govuk-table__row"
+                                + (row._bottomRow ? " bottom-row" : "")
+                                + (row._handleClick ? " clickable-row" : "")
+                            }
+                            @click=${row._handleClick || undefined}
+                        >
                             ${this.getHeaders().map(header => html`
                                 <td class="govuk-table__cell">
                                     ${row[header]}

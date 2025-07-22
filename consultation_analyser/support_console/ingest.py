@@ -1,8 +1,11 @@
 import json
 import logging
+from uuid import UUID
 
 import boto3
+import tiktoken
 from django.conf import settings
+from django.contrib.postgres.search import SearchVector
 from django_rq import get_queue
 
 from consultation_analyser.consultations.models import (
@@ -15,7 +18,9 @@ from consultation_analyser.consultations.models import (
     ResponseAnnotationTheme,
     Theme,
 )
+from consultation_analyser.embeddings import embed_text
 
+encoding = tiktoken.encoding_for_model("text-embedding-3-small")
 logger = logging.getLogger("import")
 DEFAULT_BATCH_SIZE = 10_000
 DEFAULT_TIMEOUT_SECONDS = 3_600
@@ -122,11 +127,15 @@ def validate_consultation_structure(
             responses_file = f"{folder}responses.jsonl"
 
             try:
-                s3.head_object(Bucket=bucket_name, Key=question_file)
+                response = s3.get_object(Bucket=bucket_name, Key=question_file)
+                question_data = json.loads(response["Body"].read())
+                has_free_text = question_data.get("has_free_text", True)
             except s3.exceptions.NoSuchKey:
                 errors.append(f"Missing {question_file}")
+                has_free_text = True
             except Exception as e:
                 errors.append(f"Error checking {question_file}: {str(e)}")
+                has_free_text = True
 
             try:
                 s3.head_object(Bucket=bucket_name, Key=responses_file)
@@ -135,16 +144,17 @@ def validate_consultation_structure(
             except Exception as e:
                 errors.append(f"Error checking {responses_file}: {str(e)}")
 
-            # Check output files for this question part
-            output_folder = f"{outputs_path}{question_num}/"
-            for output_file in required_outputs:
-                output_key = f"{output_folder}{output_file}"
-                try:
-                    s3.head_object(Bucket=bucket_name, Key=output_key)
-                except s3.exceptions.NoSuchKey:
-                    errors.append(f"Missing output file: {output_key}")
-                except Exception as e:
-                    errors.append(f"Error checking {output_key}: {str(e)}")
+            # Check output files for this question part, if it is a free-text question
+            if has_free_text:
+                output_folder = f"{outputs_path}{question_num}/"
+                for output_file in required_outputs:
+                    output_key = f"{output_folder}{output_file}"
+                    try:
+                        s3.head_object(Bucket=bucket_name, Key=output_key)
+                    except s3.exceptions.NoSuchKey:
+                        errors.append(f"Missing output file: {output_key}")
+                    except Exception as e:
+                        errors.append(f"Error checking {output_key}: {str(e)}")
 
         # Validate JSON/JSONL files are parseable (spot check first question part)
         if question_folders and not errors:
@@ -176,6 +186,26 @@ def validate_consultation_structure(
 
     is_valid = len(errors) == 0
     return is_valid, errors
+
+
+def create_embeddings(consultation_id: UUID):
+    queryset = Response.objects.filter(
+        question__consultation_id=consultation_id, free_text__isnull=False
+    )
+    total = queryset.count()
+    batch_size = 1_000
+
+    for i in range(0, total, batch_size):
+        responses = queryset.order_by("id")[i : i + batch_size]
+
+        free_texts = [response.free_text or "" for response in responses]
+        embeddings = embed_text(free_texts)
+
+        for response, embedding in zip(responses, embeddings):
+            response.embedding = embedding
+            response.search_vector = SearchVector("free_text")
+
+        Response.objects.bulk_update(responses, ["embedding", "search_vector"])
 
 
 def import_response_annotation_themes(question: Question, output_folder: str):
@@ -237,7 +267,7 @@ def import_response_annotations(question: Question, output_folder: str):
     evidence_dict = {}
     for line in evidence_response["Body"].iter_lines():
         evidence = json.loads(line.decode("utf-8"))
-        evidence_value = evidence.get("evidence_rich", "NO").upper()
+        evidence_value = (evidence.get("evidence_rich") or "NO").upper()
         evidence_dict[evidence["themefinder_id"]] = (
             ResponseAnnotation.EvidenceRich.YES
             if evidence_value == "YES"
@@ -267,6 +297,11 @@ def import_response_annotations(question: Question, output_folder: str):
     ResponseAnnotation.objects.bulk_create(annotations_to_save)
 
 
+def _embed_responses(responses: list[dict]) -> list[Response]:
+    embeddings = embed_text([r["free_text"] for r in responses])
+    return [Response(embedding=embedding, **r) for r, embedding in zip(responses, embeddings)]
+
+
 def import_responses(question: Question, responses_file_key: str):
     """
     Import response data for a Consultation Question.
@@ -285,7 +320,12 @@ def import_responses(question: Question, responses_file_key: str):
         respondent_dict = {r.themefinder_id: r for r in respondents}
 
         # Second pass: create responses
-        responses_to_save = []
+        # type: ignore
+        responses_to_save: list = []  # type: ignore
+        max_total_tokens = 100_000
+        max_batch_size = 2048
+        total_tokens = 0
+
         for i, line in enumerate(responses_data["Body"].iter_lines()):
             response_data = json.loads(line.decode("utf-8"))
             themefinder_id = response_data["themefinder_id"]
@@ -294,21 +334,42 @@ def import_responses(question: Question, responses_file_key: str):
                 logger.warning(f"No respondent found for themefinder_id: {themefinder_id}")
                 continue
 
+            free_text = response_data.get("text", "")
+            if not free_text:
+                logger.warning(f"Empty text for themefinder_id: {themefinder_id}")
+                continue
+
+            token_count = len(encoding.encode(free_text))
+            if token_count > 8192:
+                logger.warning(f"Truncated text for themefinder_id: {themefinder_id}")
+                free_text = free_text[:1000]
+                token_count = len(encoding.encode(free_text))
+
+            if total_tokens + token_count > max_total_tokens or len(responses_to_save) >= max_batch_size:
+                embedded_responses_to_save = _embed_responses(responses_to_save)
+                Response.objects.bulk_create(embedded_responses_to_save)
+                responses_to_save = []
+                total_tokens = 0
+                logger.info("saved %s Responses for question %s", i + 1, question.number)
+
             responses_to_save.append(
-                Response(
+                dict(
                     respondent=respondent_dict[themefinder_id],
                     question=question,
-                    free_text=response_data.get("text", ""),
+                    free_text=free_text,
                     chosen_options=response_data.get("chosen_options", []),
                 )
             )
+            total_tokens += token_count
 
-            if len(responses_to_save) >= DEFAULT_BATCH_SIZE:
-                Response.objects.bulk_create(responses_to_save)
-                responses_to_save = []
-                logger.info("saved %s Responses for question %s", i + 1, question.number)
+        # last batch
+        embedded_responses_to_save = _embed_responses(responses_to_save)
+        Response.objects.bulk_create(embedded_responses_to_save)
 
-        Response.objects.bulk_create(responses_to_save)
+        # re-save the responses to ensure that every response has search_vector
+        # i.e the lexical bit
+        for response in Response.objects.filter(question=question):
+            response.save()
 
     except Exception as e:
         logger.error(
@@ -375,6 +436,7 @@ def import_questions(
             question_data = json.loads(response["Body"].read())
 
             question_text = question_data.get("question_text", "")
+            multiple_choice_options = question_data.get("options", [])
             if not question_text:
                 raise ValueError(f"Question text is required for question {question_number}")
 
@@ -383,25 +445,26 @@ def import_questions(
                 text=question_text,
                 slug=f"question-{question_number}",
                 number=question_number,
-                has_free_text=True,  # Default for now
-                has_multiple_choice=False,  # Default for now
-                multiple_choice_options=None,
+                has_free_text=question_data.get("has_free_text", True),
+                has_multiple_choice=bool(multiple_choice_options),
+                multiple_choice_options=multiple_choice_options,
             )
 
             responses_file_key = f"{question_folder}responses.jsonl"
             responses = queue.enqueue(import_responses, question, responses_file_key)
 
-            output_folder = f"{outputs_path}question_part_{question_num_str}/"
-            themes = queue.enqueue(import_themes, question, output_folder, depends_on=responses)
-            response_annotations = queue.enqueue(
-                import_response_annotations, question, output_folder, depends_on=themes
-            )
-            queue.enqueue(
-                import_response_annotation_themes,
-                question,
-                output_folder,
-                depends_on=response_annotations,
-            )
+            if question.has_free_text:
+                output_folder = f"{outputs_path}question_part_{question_num_str}/"
+                themes = queue.enqueue(import_themes, question, output_folder, depends_on=responses)
+                response_annotations = queue.enqueue(
+                    import_response_annotations, question, output_folder, depends_on=themes
+                )
+                queue.enqueue(
+                    import_response_annotation_themes,
+                    question,
+                    output_folder,
+                    depends_on=response_annotations,
+                )
 
     except Exception as e:
         logger.error(f"Error importing question data for {consultation_code}: {str(e)}")

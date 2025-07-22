@@ -35,11 +35,22 @@ class IaiLitBase extends i$1 {
             --iai-colour-pink-transparent-mid: #F0B5D8;
 
             --iai-silver-color-light: #f8f9fa;
+            --iai-silver-color-light-darker: #f3f3f5;
+            --iai-silver-color-mid-light: #e5e5e5;
             --iai-silver-color-mid: rgba(0, 0, 0, 0.3);
             --iai-silver-color-dark: #030213;
             --iai-silver-color-text: rgb(95, 99, 104);
-            --iai-silver-color-teal: #0b8478;
-            --iai-silver-color-teal-light: #e9f2f1;
+            --iai-silver-color-teal: #00786f;
+            --iai-silver-color-teal-mid: #85d07e;
+            --iai-silver-color-teal-light: #f1fdfa;
+            --iai-silver-color-accent: #c50978;
+            --iai-silver-color-accent-light: #fcf1f6;
+            --iai-silver-color-amber: #ba4d00;
+            --iai-silver-color-amber-mid: #ffe020;
+            --iai-silver-color-amber-light: #fffbea;
+            --iai-silver-color-pink: rgb(131, 24, 67);
+            --iai-silver-color-pink-mid: rgb(197, 8, 120);
+            --iai-silver-color-pink-light: rgb(253, 242, 248);
         }
 
         .visually-hidden {
@@ -49,6 +60,10 @@ class IaiLitBase extends i$1 {
             width: 0;
             height: 0;
             overflow: hidden;
+        }
+
+        .matched-text {
+            background: yellow;
         }
     `
 
@@ -65,6 +80,9 @@ class IaiLitBase extends i$1 {
             analysing: "Analysing",
             completed: "Completed",
             closed: "Closed",
+        };
+        this._STORAGE_KEYS = {
+            FAVOURITE_QUESTIONS: "favouriteQuestions",
         };
     }
     
@@ -110,6 +128,55 @@ class IaiLitBase extends i$1 {
 
     accessibleKeyPressed = (key) => {
         return key === "Enter" || key === " ";
+    }
+
+    getPercentage = (partialValue, totalValue) => {
+        if (totalValue === 0) {
+            return 0;
+        }
+        const percentage = (partialValue / totalValue) * 100;
+
+        // Round to 1 decimal point
+        return Math.round(percentage * 10) / 10;
+    }
+
+    toTitleCase = (text) => {
+        return text
+            .replace("-", " ")
+            .replace(
+                /\w\S*/g,
+                text => text.charAt(0).toUpperCase() + text.substring(1).toLowerCase()
+            );
+    }
+
+    getHighlightedText = (fullText, matchedText) => {
+        if (!matchedText) {
+            return fullText;
+        }
+        const regex = new RegExp(matchedText, "gi");
+        return fullText.replace(regex, match => `<span class="matched-text">${match}</span>`);
+    }
+
+    limitChars = (text, maxChars) => {
+        return text.length > maxChars
+            ? text.substring(0, maxChars) + "..."
+            : text
+    }
+
+    toggleStorage = (newValue, storageKey) => {
+        let existingValues = this.getStoredValues(storageKey);
+
+        if (existingValues.includes(newValue)) {
+            existingValues = existingValues.filter(value => value !== newValue);
+        } else {
+            existingValues.push(newValue);
+        }
+        localStorage.setItem(storageKey, JSON.stringify(existingValues));
+    }
+
+    getStoredValues = (storageKey) => {
+        const storedValue = localStorage.getItem(storageKey);
+        return storedValue ? JSON.parse(storedValue) : [];
     }
 }
 
@@ -349,7 +416,7 @@ class IaiIcon extends IaiLitBase {
         this.contentId = this.generateId();
 
         // Google expect icon names to be alphabetically sorted
-        this._ALL_ICON_NAMES = ["visibility", "close", "star", "search", "thumb_up", "thumb_down", "thumbs_up_down", "arrow_drop_down_circle", "download", "diamond", "progress_activity", "sort", "schedule", "calendar_month", "group", "description", "monitoring", "settings", "help", "chat_bubble", "wand_stars"];
+        this._ALL_ICON_NAMES = ["visibility", "close", "star", "search", "thumb_up", "thumb_down", "thumbs_up_down", "arrow_drop_down_circle", "download", "diamond", "progress_activity", "sort", "schedule", "calendar_month", "group", "description", "monitoring", "settings", "help", "chat_bubble", "wand_stars", "lan", "finance", "filter_alt", "network_intelligence", "arrow_downward", "arrow_upward", "report", "chevron_left", "keyboard_arrow_down"];
         this._URL = "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=" + [...this._ALL_ICON_NAMES].sort().join(",");
 
         // Prop defaults
@@ -402,6 +469,7 @@ class IaiDataTable extends IaiLitBase {
         ...IaiLitBase.properties,
         data: { type: Array },
         initialSorts: { type: Array },
+        sortable: { type: Boolean },
         _sortedData: { type: Array },
         _sorts: { type: Array },
     }
@@ -457,6 +525,13 @@ class IaiDataTable extends IaiLitBase {
             iai-data-table thead .header-button.ascending iai-icon {
                 transform: rotateX(180deg);
             }
+            iai-data-table tr.clickable-row {
+                cursor: pointer;
+                transition: background 0.3s ease-in-out;
+            }
+            iai-data-table tr.clickable-row:hover {
+                background: rgba(0, 0, 0, 0.05);
+            }
         `
     ]
 
@@ -466,10 +541,11 @@ class IaiDataTable extends IaiLitBase {
 
         // These will not appear as column
         // as they merely act as flags for the row
-        this._RESERVED_KEYS = ["_bottomRow", "_sortValues"];
+        this._RESERVED_KEYS = ["_bottomRow", "_sortValues", "_handleClick"];
 
         // Prop defaults
         this.data = [];
+        this.sortable = true;
         this._sorts = [];
         this._sortedData = [];
     }
@@ -589,47 +665,66 @@ class IaiDataTable extends IaiLitBase {
         return this._sorts[currentSortIndex].ascending ? "ascending" : "descending";
     }
 
+    renderHeader = (header) => {
+        if (!this.sortable) {
+            return x`
+                <th
+                    scope="col"
+                    class="govuk-table__header"
+                >
+                    <h3>${header}</h3>
+                </th>
+            `
+        }
+        return x`
+            <th
+                style="" scope="col" class="govuk-table__header"
+                class=${"header-button " + this.getCurrentSortDirection(header)}
+                role="button"
+                aria-sort=${this.getCurrentSortDirection(header)}
+                aria-label=${this.getCurrentSortDirection(header)
+                    ? `Sorted by "${header}" in ${this.getCurrentSortDirection(header)} order. Click to sort in reverse.`
+                    : `Click to sort by "${header}" in ascending order`
+                }
+                tabindex=0
+                @click=${() => this.updateSorts(header)}
+                @keydown=${(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        this.updateSorts(header);
+                    }
+                }}
+            >
+                <h3>${header}</h3>
+                <iai-icon
+                    name="sort"
+                    .color=${"var(--iai-colour-text-secondary)"}
+                    .fill=${0}
+                ></iai-icon>
+            </th>
+        `
+    }
+
     render() {
+        const data = this.sortable ? this._sortedData : this.data;
+
         return x`
             <table class="govuk-table govuk-body" mentionstable="">
                 <thead class="govuk-table__head">
                     <tr class="govuk-table__row">    
-                        ${this.getHeaders().map(header => x`
-                            <th
-                                style="" scope="col" class="govuk-table__header"
-                                class=${"header-button " + this.getCurrentSortDirection(header)}
-                                    role="button"
-                                    aria-sort=${this.getCurrentSortDirection(header)}
-                                    aria-label=${this.getCurrentSortDirection(header)
-                                        ? `Sorted by "${header}" in ${this.getCurrentSortDirection(header)} order. Click to sort in reverse.`
-                                        : `Click to sort by "${header}" in ascending order`
-                                    }
-                                    tabindex=0
-                                    @click=${() => this.updateSorts(header)}
-                                    @keydown=${(e) => {
-                                        if (e.key === "Enter" || e.key === " ") {
-                                            e.preventDefault();
-                                            this.updateSorts(header);
-                                        }
-                                    }}
-                            >
-                                <h3>${header}</h3>
-                                <iai-icon
-                                    name="sort"
-                                    .color=${"var(--iai-colour-text-secondary)"}
-                                    .fill=${0}
-                                ></iai-icon>
-                            </th>
-                        `)}
+                        ${this.getHeaders().map(header => this.renderHeader(header))}
                     </tr>
                 </thead>
           
                 <tbody class="govuk-table__body">
-                    ${this._sortedData.map(row => x`
-                        <tr class=${
-                            "govuk-table__row" +
-                            (row._bottomRow ? " bottom-row" : "")
-                        }>
+                    ${data.map(row => x`
+                        <tr
+                            class=${"govuk-table__row"
+                                + (row._bottomRow ? " bottom-row" : "")
+                                + (row._handleClick ? " clickable-row" : "")
+                            }
+                            @click=${row._handleClick || undefined}
+                        >
                             ${this.getHeaders().map(header => x`
                                 <td class="govuk-table__cell">
                                     ${row[header]}
@@ -644,14 +739,71 @@ class IaiDataTable extends IaiLitBase {
 }
 customElements.define("iai-data-table", IaiDataTable);
 
+class Button extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        text: { type: String },
+        handleClick: { type: Function },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-button button {
+                background: white;
+                outline: none;
+                border: 1px solid var(--iai-silver-color-mid-light);
+                padding: 0.5em 1em;
+                border-radius: 0.5em;
+                cursor: pointer;
+                transition: background 0.3s ease-in-out;
+            }
+            iai-silver-button button:hover {
+                background: var(--iai-silver-color-light);
+            }
+            iai-silver-button button:focus-visible {
+                outline: 3px solid #fd0;
+                outline-offset: 0;
+                box-shadow: inset 0 0 0 2px;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.text = "white";
+        this.handleClick = () => {};
+
+        this.applyStaticStyles("iai-silver-button", Button.styles);
+    }
+
+    render() {
+        return x`
+            <button @click=${this.handleClick}>
+                ${this.text}
+            </button>
+        `
+    }
+}
+customElements.define("iai-silver-button", Button);
+
 class IaiCsvDownload extends IaiLitBase {
     static styles = [
         IaiLitBase.styles,
         i$4`
+            iai-csv-download a {
+                text-decoration: none;
+            }
             iai-csv-download a.govuk-button {
                 min-height: auto;
                 min-width: 13em;
                 justify-content: center;
+            }
+            iai-csv-download iai-silver-button button {
+                padding-block: 0.25em;
             }
         `
     ]
@@ -660,6 +812,7 @@ class IaiCsvDownload extends IaiLitBase {
         ...IaiLitBase.properties,
         data: {type: Array},
         fileName: { type: String },
+        variant: { type: String }, // "" | "silver"
     }
 
     constructor() {
@@ -667,12 +820,13 @@ class IaiCsvDownload extends IaiLitBase {
 
         this.data = [];
         this.fileName = "data.csv";
+        this.variant = "";
 
         this.applyStaticStyles("iai-csv-download", IaiCsvDownload.styles);
     }
 
     buildCsv(data) {
-        if (!data) {
+        if (!data || !Object.keys(data).length > 0) {
             return "";
         }
 
@@ -693,16 +847,32 @@ class IaiCsvDownload extends IaiLitBase {
     render() {
         return x`
             <a
-                class="govuk-button"
+                class=${!this.variant ? "govuk-button" : ""}
                 aria-label="Download themes as CSV"
                 title="Download themes as CSV"
                 href=${this.getDownloadUrl(this.buildCsv(this.props.data || this.data))}
                 download=${this.fileName}
             >
-                Download CSV
-                <iai-icon
-                    name="download"
-                ></iai-icon>
+                ${this.variant === "silver"
+                    ? x`
+                        <iai-silver-button
+                            .icon=${"download"}
+                            .text=${x`
+                                <iai-icon
+                                    name="download"
+                                ></iai-icon>
+                                <span>
+                                    Export
+                                </span>
+                            `}
+                        ></iai-silver-button>
+                    `
+                    : x`
+                        Download CSV
+                        <iai-icon
+                            name="download"
+                        ></iai-icon>
+                    `}
             </a>
         `
     }
@@ -876,6 +1046,7 @@ class IaiCheckboxInput extends IaiLitBase {
         ...IaiLitBase.properties,
         inputId: { type: String },
         label: { type: String },
+        hideLabel: { type: Boolean },
         checked: {type: Boolean },
         value: { type: String },
         handleChange: { type: Function },
@@ -898,6 +1069,7 @@ class IaiCheckboxInput extends IaiLitBase {
     constructor() {
         super();
         this.inputId = "";
+        this.hideLabel = false;
         this.label = "";
         this.checked = false;
         this.value = "";
@@ -928,7 +1100,7 @@ class IaiCheckboxInput extends IaiLitBase {
                     class="govuk-label govuk-checkboxes__label"
                     for=${this.inputId}
                 >
-                    ${this.label}
+                    ${this.hideLabel ? "" : this.label}
                 </label>
             </div>
         `
@@ -1460,13 +1632,14 @@ class IaiIconButton extends IaiLitBase {
                 background: none;
                 border: none;
                 cursor: pointer;
-                border-radius: 50%;
+                border-radius: 0.5em;
                 padding: 0.3em 0.5em;
                 transition: 0.3s ease-in-out;
-                transition-property: background-color;
+                transition-property: background-color, color;
             }
             iai-icon-button button:hover {
-                background: var(--iai-colour-pink-transparent);
+                color: black;
+                background: #cbfbf1;
             }
             iai-icon-button iai-icon {
                 font-size: 1.2em;
@@ -1823,10 +1996,20 @@ class IaiProgressBar extends IaiLitBase {
         this.applyStaticStyles("iai-progress-bar", IaiProgressBar.styles);
     }
 
+    getWidth() {
+        if (this.value > 100) {
+            return 100;
+        }
+        if (this.value < 0) {
+            return 0;
+        }
+        return this.value;
+    }
+
     render() {
         return x`
             <div class=${"container" + (this.value < 30 ? " low-value" : "")}>
-                <div class="bar" style=${`width: ${this.value}%;`}>
+                <div class=${"bar" + (this.value >= 100 ? " full" : "")} style=${`width: ${this.getWidth()}%;`}>
                     ${this.label
                         ? x`
                             <span class="label">
@@ -2398,7 +2581,8 @@ class IaiAnimatedNumber extends IaiLitBase {
             const time = Math.min(elapsedTime / duration, 1);
             const currValue = start * (1 - time) + end * time;
 
-            setDisplayNumber(Math.round(currValue));
+            // round to 1 decimal point
+            setDisplayNumber(Math.round(currValue * 10) / 10);
 
             if (time < 1) {
                 requestAnimationFrame(update_number);
@@ -4603,4 +4787,3925 @@ class IaiResponseDashboard extends IaiLitBase {
     }
 }
 customElements.define("iai-response-dashboard", IaiResponseDashboard);
+
+class SearchBox extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        inputId: { type: String },
+        name: { type: String },
+        label: { type: String },
+        placeholder: { type: String },
+        value: { type: String },
+        hideLabel: { type: Boolean },
+        handleInput: { type: Function },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-search-box .search-box-container {
+                position: relative;
+            }
+            iai-silver-search-box .search-box-container input {
+                padding-left: 2.5em;
+                border-radius: 0.5em;
+                background: var(--iai-silver-color-light);
+                border: none;
+            }
+            iai-silver-search-box .search-box-container iai-icon {
+                position: absolute;
+                left: 0.5em;
+                bottom: 0.5em;
+            }
+            iai-silver-search-box .clear-button {
+                position: absolute;
+                top: 50%;
+                right: 2em;
+                z-index: 1;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.inputId = "";
+        this.name = "";
+        this.label = "";
+        this.placeholder = "";
+        this.value = "";
+        this.hideLabel = true;
+        this.handleInput = () => {};
+
+        this.applyStaticStyles("iai-silver-search-box", SearchBox.styles);
+    }
+
+    render() {
+        return x`
+            <div class="search-box-container">
+                <iai-text-input
+                    .inputId=${this.inputId}
+                    .name=${this.name}
+                    .label=${this.label}
+                    .placeholder=${this.placeholder}
+                    .value=${this.value}
+                    .hideLabel=${this.hideLabel}
+                    .handleInput=${this.handleInput}
+                ></iai-text-input>
+
+                <iai-icon
+                    name="search"
+                    .color=${"var(--iai-colour-text-secondary)"}
+                    .fill=${0}
+                ></iai-icon>
+
+                ${this.value
+                    ? x`
+                        <iai-icon-button
+                            class="clear-button"
+                            .title="Clear search"
+                            @click=${() => {
+                                this.value = "";
+                                this.handleInput({target: {value: ""}});
+                                this.querySelector("input").value = "";
+                            }}
+                        >
+                            <iai-icon
+                                slot="icon"
+                                .name=${"close"}
+                                .color=${"var(--iai-silver-color-text)"}
+                            ></iai-icon>
+                        </iai-icon-button>
+                    `
+                    : ""
+                }
+            </div>
+        `;
+    }
+}
+customElements.define("iai-silver-search-box", SearchBox);
+
+class IconTile extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        color: { type: String },
+        backgroundColor: { type: String },
+        name: { type: String },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-icon-tile {
+                display: block;    
+                width: max-content;
+            }
+            iai-silver-icon-tile .icon-tile-container {
+                display: flex;    
+                justify-content: center;
+                align-items: center;
+                background: salmon;
+                padding: 0.4em;
+                border-radius: 0.5em;
+            }
+            iai-silver-icon-tile .material-symbols-outlined {
+                font-size: 2em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.color = "white";
+        this.backgroundColor = "black";
+        this.name = "";
+
+        this.applyStaticStyles("iai-silver-icon-tile", IconTile.styles);
+    }
+
+    render() {
+        return x`
+            <style>
+                #${this.contentId} {
+                    color: ${this.color};
+                    background: ${this.backgroundColor};
+                }
+            </style>
+            <div id=${this.contentId} class="icon-tile-container">
+                <iai-icon
+                    .name=${this.name}
+                ></iai-icon>
+            </div>
+        `
+    }
+}
+customElements.define("iai-silver-icon-tile", IconTile);
+
+class Title extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        level: { type: Number },
+        text: { type: String },
+        subtext: { type: String },
+        icon: { type: String },
+        aside: { type: String },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-title h1,
+            iai-silver-title h2,
+            iai-silver-title h3,
+            iai-silver-title h4 {
+                margin: 0;
+            }
+            iai-silver-title h1 {
+                font-size: 1.3em;
+            }
+            iai-silver-title h2 {
+                font-size: 1em;
+            }
+            iai-silver-title h3,
+            iai-silver-title h4 {
+                font-size: 0.9em;
+            }
+            iai-silver-title .container {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+            }
+            iai-silver-title .icon-container {
+                display: flex;
+                align-items: center;
+                gap: 0.5em;
+                margin-bottom: 1.5em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.level = 2;
+        this.text = "";
+        this.subtext = "";
+        this.icon = "";
+        this.aside = "";
+
+        this.applyStaticStyles("iai-silver-title", Title.styles);
+    }
+
+    renderTitleTag = () => {
+        switch (this.level) {
+            case 1:
+                return x`<h1>${this.text}</h1>`;
+            case 2:
+                return x`<h2>${this.text}</h2>`;
+            case 3:
+                return x`<h3>${this.text}</h3>`;
+            case 4:
+                return x`<h4>${this.text}</h4>`;
+        }
+    }
+
+    render() {
+        return x`
+        <div class="container">
+            <div class="icon-container">
+                ${this.icon
+                    ? x`
+                        <iai-silver-icon-tile
+                            .backgroundColor=${"var(--iai-silver-color-accent-light)"}
+                            .color=${"var(--iai-silver-color-accent)"}
+                            .name=${this.icon}
+                        ></iai-silver-icon-tile>
+                    `
+                    : ""
+                }
+
+                <div>
+                    ${this.renderTitleTag()}
+
+                    ${this.subtext
+                        ? x`
+                            <small>
+                                ${this.subtext}
+                            </small>
+                        `
+                        : ""
+                    }
+                </div>
+            </div>
+
+            <aside>
+                ${this.aside}
+            </aside>
+        </div>
+        `
+    }
+}
+customElements.define("iai-silver-title", Title);
+
+class Panel extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        borderColor: { type: String },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-panel .panel {
+                padding: 1em;
+                border: 1px solid;
+                border-radius: 1em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+        
+        // Prop defaults
+        this.borderColor = "";
+
+        this.applyStaticStyles("iai-silver-panel", Panel.styles);
+    }
+
+    updated() {
+        this.applySlots("content");
+    }
+
+    render() {
+        return x`
+            <style>
+                #${this.contentId} {
+                    border-color: ${this.borderColor || "var(--iai-silver-color-mid-light)"};
+                }
+            </style>
+            <div id=${this.contentId} class="panel">
+                <slot name="content"></slot>
+            </div>
+        `
+    }
+}
+customElements.define("iai-silver-panel", Panel);
+
+class IaiSelectInput extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        inputId: { type: String },
+        name: {type: String},
+        label: { type: String },
+        hideLabel: { type: Boolean },
+        placeholder: { type: String },
+        options: { type: Array },
+        value: { type: String },
+        handleInput: { type: Function },
+        horizontal: { type: Boolean },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            .horizontal {
+                display: flex;
+                align-items: center;
+                gap: 0.5em;
+            }
+            .horizontal label {
+                margin: 0;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.inputId = "";
+        this.name = "";
+        this.label = "";
+        this.hideLabel = true;
+        this.placeholder = "";
+        this.options = [];
+        this.value = "";
+        this.handleChange = () => {};
+        this.horizontal = false;
+
+        this.applyStaticStyles("iai-select-input", IaiSelectInput.styles);
+    }
+
+    render() {
+        return x`
+            <div class=${"govuk-form-group" + (this.horizontal ? " horizontal" : "")}>
+                <label
+                    class=${"govuk-label" + (this.hideLabel ? " visually-hidden" : "")}
+                    for=${this.inputId}
+                >
+                    ${this.label}
+                </label>
+                <select
+                    class="govuk-select"
+                    .id=${this.inputId}
+                    .name=${this.name}
+                    .value=${this.value}
+                    @change=${this.handleChange}
+                >
+                    ${[ // Add placeholder empty option to options
+                        { value: "", text: this.placeholder },
+                        ...this.options
+                    ].map(option => {
+                        if (!option.value && !this.placeholder) {
+                            return "";
+                        }
+                        return x`
+                            <option
+                                .value=${option.value}
+                                ?selected=${option.value === this.value}
+                            >
+                                ${option.text}
+                            </option>
+                        `})
+                    }
+                </select>
+            </div>
+        `
+    }
+}
+customElements.define("iai-select-input", IaiSelectInput);
+
+class SelectInput extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        inputId: { type: String },
+        name: { type: String },
+        label: { type: String },
+        hideLabel: { type: Boolean },
+        placeholder: { type: String },
+        options: { type: Array },
+        value: { type: String },
+        handleInput: { type: Function },
+        horizontal: { type: Boolean },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-select-input iai-select-input select.govuk-select {
+                border: none;
+                background: var(--iai-silver-color-light);
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.inputId = "";
+        this.name = "";
+        this.label = "";
+        this.hideLabel = true;
+        this.placeholder = "";
+        this.options = [];
+        this.value = "";
+        this.handleChange = () => {};
+        this.horizontal = false;
+
+        this.applyStaticStyles("iai-silver-select-input", SelectInput.styles);
+    }
+
+    render() {
+        return x`
+            <iai-select-input
+                .inputId=${this.inputId}
+                .name=${this.name}
+                .label=${this.label}
+                .hideLabel=${this.hideLabel}
+                .placeholder=${this.placeholder}
+                .options=${this.options}
+                .value=${this.value}
+                .handleChange=${this.handleChange}
+                .horizontal=${this.horizontal}
+            ></iai-select-input>
+        `
+    }
+}
+customElements.define("iai-silver-select-input", SelectInput);
+
+class Card extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        color: { type: String },
+        backgroundColor: { type: String },
+        text: { type: String },
+        number: { type: Number },
+        icon: { type: String },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-card {
+                display: block;    
+                width: max-content;
+            }
+            iai-silver-card p {
+                margin: 0;
+            }
+            iai-silver-card .number {
+                font-size: 1.3em;
+            }
+            iai-silver-card .text {
+                font-size: 0.8em;
+            }
+            iai-silver-card div[slot="content"] {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 1em;
+                padding: 1em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.color = "white";
+        this.backgroundColor = "black";
+        this.text = "";
+        this.number = 0;
+        this.icon = "";
+
+        this.applyStaticStyles("iai-silver-card", Card.styles);
+    }
+
+    render() {
+        return x`
+            <iai-silver-panel .borderColor=${this.color}>
+                <div slot="content">
+                    <iai-silver-icon-tile
+                        .color=${this.color}
+                        .backgroundColor=${this.backgroundColor}
+                        .name=${this.name}
+                    ></iai-silver-icon-tile>
+                    <div>
+                        <p class="text">${this.text}</p>
+                        <p class="number">${this.number}</p>
+                    </div>
+                </div>
+            </iai-silver-panel>
+        `
+    }
+}
+customElements.define("iai-silver-card", Card);
+
+class Consultation extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        status: { type: String },
+        title: { type: String },
+        description: { type: String },
+        department: { type: String },
+        numResponses: { type: Number },
+        numQuestions: { type: Number },
+        numThemes: { type: Number },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-consultation .topbar {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 1em;
+            }
+            iai-silver-consultation .topbar .tags {
+                display: flex;    
+                align-items: center;
+                gap: 0.5em;
+            }
+
+            iai-silver-consultation .tag {
+                padding: 0.3em 0.5em;
+            }
+
+            iai-silver-consultation .status {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                font-size: 0.8em;
+                color: white;
+                background: #85d07e;                
+                border-radius: 0.5em;
+            }
+            iai-silver-consultation .department {
+                font-size: 0.8em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.status = "";
+        this.title = "";
+        this.description = "";
+        this.department = "";
+        this.numResponses = 0;
+        this.numQuestions = 0;
+        this.numThemes = 0;
+
+        this.applyStaticStyles("iai-silver-consultation", Consultation.styles);
+    }
+
+    getIconColor = (status) => {
+        switch (status) {
+            case this.CONSULTATION_STATUSES.open:
+                return "#85d07e";
+            case this.CONSULTATION_STATUSES.analysing:
+                return "#efdb5d";
+            case this.CONSULTATION_STATUSES.completed:
+                return "#0b8478";
+            case this.CONSULTATION_STATUSES.closed:
+                return "var(--iai-silver-color-text)";
+            default:
+                return "#85d07e";
+        }
+    }
+
+    getTagColor = (status) => {
+        switch (status) {
+            case this.CONSULTATION_STATUSES.open:
+                return "#85d07e";
+            case this.CONSULTATION_STATUSES.analysing:
+                return "#efdb5d";
+            case this.CONSULTATION_STATUSES.completed:
+                return "#0b8478";
+            case this.CONSULTATION_STATUSES.closed:
+                return "#f8f9fa";
+            default:
+                return "#85d07e";
+        }
+    }
+
+    render() {
+        return x`
+            <iai-silver-panel>
+                <div slot="content">
+                    <div class="topbar">
+                        <div class="tags">
+                            <iai-icon
+                                name="schedule"
+                                .color=${this.getIconColor(this.status)}
+                            ></iai-icon>
+
+                            <span class="tag status" style=${`background: ${this.getTagColor(this.status)}; color: ${this.status == this.CONSULTATION_STATUSES.closed ? "black" : "white"}`}>
+                                ${this.status}
+                            </span>
+
+                            <span class="tag" style="border-radius: 0.5em; background: white; border: 1px solid var(--iai-silver-color-mid); padding-inline: 0.5em; font-size: 0.8em; display: flex; justify-content: center; align-items: center;">
+                                Transport
+                            </span>
+                        </div>
+                        <div>
+                            <iai-silver-button
+                                .text=${"View analysis"}
+                                .handleClick=${() => console.log("button clicked")}
+                            ></iai-silver-button>
+                        </div>
+                    </div>
+
+                    <iai-silver-title
+                        .text=${this.title}
+                        .variant=${"secondary"}
+                    ></iai-silver-title>
+
+                    <p>
+                        ${this.description}
+                    </p>
+                    
+                    <div style="display: flex; gap: 1em;">
+                        <div style="display: flex; align-items: center; gap: 0.25em; margin-bottom: 0.5em;">
+                            <iai-icon
+                                name="calendar_month"
+                                color="var(--iai-silver-color-text)"
+                            ></iai-icon>
+                            <small>
+                                4 May 2024 - 8 Aug 2024
+                            </small>
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.25em; margin-bottom: 0.5em;">
+                            <iai-icon
+                                name="group"
+                                color="var(--iai-silver-color-text)"
+                            ></iai-icon>
+                            <small>
+                                ${this.numResponses.toLocaleString()} responses
+                            </small>
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.25em; margin-bottom: 0.5em;">
+                            <iai-icon
+                                name="description"
+                                color="var(--iai-silver-color-text)"
+                            ></iai-icon>
+                            <small>
+                                ${this.numQuestions} questions
+                            </small>
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.25em; margin-bottom: 0.5em;">
+                            <iai-icon
+                                name="monitoring"
+                                color="var(--iai-silver-color-text)"
+                            ></iai-icon>
+                            <small>
+                                ${this.numThemes} themes
+                            </small>
+                        </div>
+                    </div>
+
+                    <small class="department">
+                        ${this.department}
+                    </small>
+                </div>
+            </iai-silver-panel>
+        `
+    }
+}
+customElements.define("iai-silver-consultation", Consultation);
+
+class CrossSearchCard extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        title: { type: String },
+        aside: { type: String },
+        description: { type: String },
+        tags: { type: Array }, //  Array<String>
+        type: { type: String }, //  "question" | "response"
+        highlightText: { type: String },
+        footer: { type: String },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-cross-search-card h3 {
+                font-size: 0.9em;
+                margin: 0;
+            }
+            iai-silver-cross-search-card .container {
+                display: flex;
+                gap: 0.5em;
+            }
+            iai-silver-cross-search-card .body-container {
+                flex-grow: 1;
+            }
+            iai-silver-cross-search-card .title-container {
+                display: flex;
+                justify-content: space-between;
+            }
+            iai-silver-cross-search-card .tags {
+                display: flex;
+                gap: 0.5em;
+                flex-wrap: wrap;
+            }
+            iai-silver-cross-search-card .tag {
+                display: flex;
+                justify-content: center;
+                align-items: center;    
+                padding: 0.3em 0.5em;
+                background: #e6e6e7;
+                font-size: 0.8em;
+                border-radius: 0.5em;
+            }
+            iai-silver-cross-search-card .matched-text {
+                background: yellow;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.title = "";
+        this.aside = "";
+        this.description = "";
+        this.tags = [];
+        this.type = "question";
+        this.highlightText = "";
+        this.footer = "";
+
+        this.applyStaticStyles("iai-silver-cross-search-card", CrossSearchCard.styles);
+    }
+
+    applyTextHighlight = (text) => {
+        if (!this.highlightText) {
+            return text;
+        }
+        const regex = new RegExp(this.highlightText, "gi");
+        return o$2(text.replace(regex, match => `<span class="matched-text">${match}</span>`));
+    }
+
+    render() {
+        return x`
+            <iai-silver-panel>
+                <article slot="content">
+                    <div class="container">
+                        <div>
+                            <iai-icon
+                                .name=${this.type == "question" ? "help" : "chat_bubble"}
+                                .color=${this.type == "question"
+                                    ? "oklch(.6 .118 184.704)"
+                                    : "oklch(.828 .189 84.429)"
+                                }
+                            ></iai-icon>
+                        </div>
+
+                        <div class="body-container">
+                            <div class="title-container">
+                                <h3>
+                                    ${this.applyTextHighlight(this.title)}
+                                </h3>
+
+                                ${this.aside ? this.aside : ""}
+                            </div>
+
+                            <p>
+                                ${this.applyTextHighlight(this.description)}
+                            </p>
+
+                            <footer class="tags">
+                                ${this.footer}
+                                ${this.tags.map(tag => x`
+                                    <span class="tag">
+                                        ${tag}
+                                    </span>
+                                `)}
+                            </footer>
+                        <div>
+                    </div>
+                </article>
+            </iai-silver-panel>
+        `
+    }
+}
+customElements.define("iai-silver-cross-search-card", CrossSearchCard);
+
+class Tag extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        status: { type: String },
+        text: { type: String },
+        subtext: { type: String },
+        matchBackground: { type: Boolean },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-tag .tag {
+                display: grid;
+                width: max-content;
+                max-width: 100%;
+                gap: 0.5em; 
+                padding: 0.3em 0.5em;
+                font-size: 0.8em;
+                line-height: 1.5em;
+                color: white;
+                border-radius: 0.5em;
+            }
+            iai-silver-tag iai-icon {
+                margin-right: 0.3em;
+            }
+            iai-silver-tag iai-icon .material-symbols-outlined {
+                font-size: 1.3em;
+            }
+            iai-silver-tag .text-container {
+                display: flex;
+                align-items: center;
+                font-weight: bold;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.status = "";
+        this.text = "";
+        this.subtext = "";
+        this.matchBackground = false;
+        
+        this.applyStaticStyles("iai-silver-tag", Tag.styles);
+    }
+
+    getTagColor = (status) => {
+        switch (status) {
+            case this.CONSULTATION_STATUSES.open:
+                return {
+                    primary: "var(--iai-silver-color-teal)",
+                    secondary: "var(--iai-silver-color-teal-light)",
+                    ternary: "var(--iai-silver-color-teal-mid)",
+                };
+            case this.CONSULTATION_STATUSES.analysing:
+                return {
+                    primary: "var(--iai-silver-color-pink)",
+                    secondary: "var(--iai-silver-color-pink-light)",
+                    ternary: "var(--iai-silver-color-pink-mid)",
+                };
+            case this.CONSULTATION_STATUSES.completed:
+                return {
+                    primary: "var(--iai-silver-color-teal)",
+                    secondary: "var(--iai-silver-color-teal-light)",
+                    ternary: "var(--iai-silver-color-teal-mid)",
+                };
+            case this.CONSULTATION_STATUSES.closed:
+                return {
+                    primary: "var(--iai-silver-color-amber)",
+                    secondary: "var(--iai-silver-color-amber-light)",
+                    ternary: "var(--iai-silver-color-amber-mid)",
+                };
+            default:
+                return {
+                    primary: "var(--iai-silver-color-dark)",
+                    secondary: "var(--iai-silver-color-light)",
+                    ternary: "var(--iai-silver-color-mid-light)",
+                };
+        }
+    }
+
+    render() {
+        return x`
+            <style>
+                #${this.contentId} {
+                    color: ${this.getTagColor(this.status).primary};
+                    background: ${this.matchBackground
+                        ? this.getTagColor(this.status).ternary
+                        : this.getTagColor(this.status).secondary
+                    };
+                    border: 1px solid ${this.getTagColor(this.status).ternary};
+                }
+            </style>
+            
+            <span id=${this.contentId} class="tag">
+                <span class="text-container">
+                    ${this.icon
+                        ? x`
+                            <iai-icon
+                                .name=${this.icon}
+                                .color=${this.getTagColor(this.status).primary}
+                            ></iai-icon>
+                        `
+                        : ""
+                    }
+                    ${this.text}
+                </span>
+
+                ${this.subtext ? x`
+                    <span>
+                        ${this.subtext}
+                    </span>    
+                ` : ""}
+            </span>
+        `
+    }
+}
+customElements.define("iai-silver-tag", Tag);
+
+class QuestionOverviewPage extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        questions: { type: Array },
+        consultationName: { type: String },
+        _searchValue: { type: String },
+        _favouritedQuestions: { type: Array },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-question-overview-page {
+                color: var(--iai-silver-color-text);
+            }
+            iai-question-overview-page section {
+                margin-bottom: 2em;
+            }
+            iai-question-overview-page ul {
+                padding-left: 0;
+            }
+            iai-question-overview-page li {
+                list-style: none;
+                margin-top: 1em;
+                cursor: pointer;
+                transition: background 0.3s ease-in-out;
+            }
+            iai-question-overview-page li:hover {
+                background: var(--iai-silver-color-light);
+            }
+            iai-question-overview-page iai-silver-cross-search-card .icon-container {
+                margin-bottom: 0;
+            }
+            iai-question-overview-page .response-total {
+                display: flex;
+                align-items: center;
+            }
+            iai-question-overview-page .favourite-button {
+                margin-top: -0.4em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.consultationName = "";
+        this.questions = [];
+
+        this._searchValue = "";
+        this._favouritedQuestions = [];
+
+        this.applyStaticStyles("iai-question-overview-page", QuestionOverviewPage.styles);
+    }
+
+    firstUpdated() {
+        this._favouritedQuestions = this.getStoredValues(this._STORAGE_KEYS.FAVOURITE_QUESTIONS);
+    }
+
+    renderSearchCard(question, index) {
+        return x`
+            <iai-silver-cross-search-card
+                @click=${() => window.location.href = question.url}
+                .type=${"question"}
+                .title=${question.title}
+                .aside=${x`
+                    <iai-icon-button
+                        class="favourite-button"
+                        title="Favourite this question"
+                        @click=${(e) => {
+                            e.stopPropagation();
+                            this.toggleStorage(question.id, this._STORAGE_KEYS.FAVOURITE_QUESTIONS);
+                            this._favouritedQuestions = this.getStoredValues(this._STORAGE_KEYS.FAVOURITE_QUESTIONS);
+                        }}
+                    >
+                        <iai-icon
+                            slot="icon"
+                            name="star"
+                            .color=${"var(--iai-silver-color-text)"}
+                            .fill=${this._favouritedQuestions.includes(question.id) ? 1 : 0}
+                        ></iai-icon>
+                    </iai-icon-button>
+                `}
+                .footer=${x`
+                    <small class="response-total">
+                        ${question.numResponses.toLocaleString()} responses
+                    </small>
+                    <iai-silver-tag
+                        .status=${question.status}
+                        .text=${question.status}
+                        .icon=${"chat_bubble"}
+                    ></iai-silver-tag>
+                `}
+                .highlightText=${this._searchValue}
+            ></iai-silver-cross-search-card>
+        `
+    }
+
+    render() {
+        return x`
+            <section>
+                <iai-silver-title
+                    .level=${2}
+                    .text=${"Favourited Questions"}
+                    .icon=${"star"}
+                ></iai-silver-title>
+
+                <iai-silver-panel>
+                    <div slot="content">
+                        <ul>
+                            ${this.questions
+                                .filter(question => this._favouritedQuestions.includes(question.id))
+                                .map((question, index) => x`
+                                <li>
+                                    ${this.renderSearchCard(question, index)}
+                                </li>
+                            `)}
+                        </ul>
+                    </div>
+                </iai-silver-panel>
+            </section>
+
+            <section>
+                <iai-silver-title
+                    .level=${2}
+                    .text=${"All consultation questions"}
+                    .subtext=${"Browse or search through all questions in this consultation."}
+                    .aside=${x`<small>${this.questions.length} questions</small>`}
+                    .icon=${"help"}
+                ></iai-silver-title>
+
+                <iai-silver-panel>
+                    <div slot="content">
+
+                        <iai-silver-search-box
+                            .inputId=${"search-value"}
+                            .name=${"search-value"}
+                            .label=${"Search"}
+                            .placeholder=${"Search..."}
+                            .value=${this._searchValue}
+                            .hideLabel=${true}
+                            .handleInput=${(e) => this._searchValue = e.target.value.trim()}
+                        ></iai-silver-search-box>
+
+                        <ul>
+                            ${this.questions
+                                .filter(question => !this._searchValue
+                                    || question.title.toLocaleLowerCase().includes(this._searchValue.toLocaleLowerCase()))
+                                .map((question, index) => x`
+                                <li>
+                                    ${this.renderSearchCard(question, index)}
+                                </li>
+                            `)}
+                        </ul>
+
+                    </div>
+                </iai-silver-panel>
+            </section>
+        `
+    }
+}
+customElements.define("iai-question-overview-page", QuestionOverviewPage);
+
+class ToggleInput extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        inputId: { type: String },
+        label: { type: String },
+        hideLabel: { type: Boolean },
+        checked: {type: Boolean },
+        value: { type: String },
+        handleChange: { type: Function },
+        name: {type: String},
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-toggle-input {
+                --handle-size: 1.2em;
+                display: flex;
+                gap: 1em;
+                align-items: center;
+            }
+            iai-toggle-input input {
+                opacity: 0;
+                position: absolute;
+                z-index: -1;
+            }
+            iai-toggle-input label {
+                cursor: pointer;
+            }
+            iai-toggle-input label.slider {
+                position: relative;
+                display: inline-block;
+                width: 3em;
+                height: 1.5em;
+                background: var(--iai-silver-color-mid);
+                border-radius: 5em;
+                cursor: pointer;
+                transition: background 0.3s ease-in-out;
+            }
+            iai-toggle-input label.slider:before {
+                content: "";
+                position: absolute;
+                height: var(--handle-size);
+                width: var(--handle-size);
+                border-radius: 50%;
+                background: white;
+                left: calc(var(--handle-size) / 5);
+                top: calc(var(--handle-size) / 9);
+                transition: left 0.3s ease-in-out;
+                cursor: pointer;
+            }
+            iai-toggle-input label.slider:has(input:focus),
+            iai-toggle-input label.slider:has(input:focus-visible) {
+                outline: 0.3em solid var(--iai-colour-focus);
+            }
+            iai-toggle-input label.slider:has(input[data-checked="true"]) {
+                background: var(--iai-silver-color-dark);
+            }
+            iai-toggle-input label.slider:has(input[data-checked="true"])::before {
+                left: calc(45% + var(--handle-size) / 5);
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.inputId = "";
+        this.label = "";
+        this.checked = false;
+        this.value = "";
+        this.handleChange = () => {};
+        this.name = "";
+
+        this.applyStaticStyles("iai-toggle-input", ToggleInput.styles);
+    }
+
+    updated(changedProps) {
+        if (changedProps.has("checked")) {
+            this.querySelector("input").checked = this.checked;
+        }
+    }
+
+    render() {
+        return x`
+            <label for=${this.inputId} class=${this.hideLabel ? "visually-hidden" : ""}>
+                ${this.label}
+            </label>
+            <label class="slider" for=${this.inputId}>
+                <input
+                    type="checkbox"
+                    id=${this.inputId}
+                    name=${this.name}
+                    value=${this.value}
+                    @click=${this.handleChange}
+                    data-checked=${this.checked ? "true" : "false"}
+                >
+            </label>
+        `
+    }
+}
+customElements.define("iai-toggle-input", ToggleInput);
+
+class ThemesTable extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        themes: { type: Array },
+        themeFilters: { type: Array },
+        setThemeFilters: { type: Function },
+        totalResponses: { type: Number },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-themes-table iai-data-table {
+                display: block;
+                overflow-x: auto;
+            }
+            iai-themes-table .theme-title {
+                font-weight: bold;
+                font-size: 0.9em;
+                color: var(--iai-silver-color-text);
+            }
+            iai-themes-table .theme-description {
+                display: block;
+                font-size: 0.9em;
+                min-width: 20em;
+            }
+            iai-themes-table .percentage-cell {
+                gap: 0.5em;
+                display: flex;
+                align-items: center;
+            }
+            iai-themes-table .title-container {
+                display: flex;
+                align-items: center;
+                gap: 1em;
+            }
+            iai-themes-table input[type="checkbox"] {
+                filter: grayscale(0.5) hue-rotate(75deg);
+            }
+
+            iai-themes-table .percentage-cell iai-progress-bar .bar {
+                background: var(--iai-silver-color-accent);
+            }
+            iai-themes-table .percentage-cell iai-progress-bar .container {
+                background: var(--iai-silver-color-mid-light);
+            }
+
+            iai-themes-table iai-silver-button button {
+                width: max-content;
+                display: flex;
+                align-items: center;
+                padding-inline: 0.5em;
+                gap: 0.5em;
+                font-weight: bold;
+                color: var(--iai-silver-color-text);
+            }
+            iai-themes-table input {
+                cursor: pointer;
+            }
+            iai-themes-table tr {
+                transition: background 0.3s ease-in-out;
+            }
+            iai-themes-table tr:has(input:checked) {
+                background: var(--iai-silver-color-teal-light);
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+        this._NUMBER_ANIMATION_DURATION = 1000;
+
+        this.themes = [];
+        this.themeFilters = [];
+        this.setThemeFilters = () => {};
+        this.totalResponses = 0;
+
+        this.applyStaticStyles("iai-themes-table", ThemesTable.styles);
+    }
+
+    render() {
+        return x`
+            <iai-data-table
+                .sortable=${false}
+                .data=${this.themes
+                    .map(theme => (
+                        {
+                            // _sortValues are the values used for sorting comparison
+                            // instead of the actual value of a cell, which can be an obj etc.
+                            // particularly useful for html elements and dates.
+                            "_sortValues": {
+                                "Mentions": parseInt(theme.mentions),
+                                "Percentage": parseInt(theme.percentage),
+                                "Theme": theme.title,
+                            },
+                            "_handleClick": () => this.setThemeFilters(theme.id),
+                            "Theme": x`
+                                <div class="title-container">
+                                    <div>
+                                        <input
+                                            type="checkbox"
+                                            class="theme-checkbox"
+                                            id=${"theme-filters" + theme.title.toLowerCase().replace(" ", "-")}
+                                            name="theme-filters"
+                                            .value=${theme.id}
+                                            .checked=${this.themeFilters.includes(theme.id)}
+                                            @click=${(e) => {
+                                                e.stopPropagation();
+                                                this.setThemeFilters(e.target.value);
+                                            }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <span class="theme-title">
+                                            ${theme.title}
+                                        </span>
+                                        <span class="theme-description">
+                                            ${theme.description}
+                                        </span>
+                                    </div>
+                                </div>
+                            `,
+                            "Mentions": x`
+                                <iai-animated-number
+                                    .number=${theme.mentions}
+                                    .duration=${this._NUMBER_ANIMATION_DURATION}
+                                ></iai-animated-number>
+                            `,
+                            "Percentage": x`
+                                <div class="percentage-cell">
+                                    <div>
+                                        <iai-animated-number
+                                            .number=${this.getPercentage(theme.mentions, this.totalResponses)}
+                                            .duration=${this._NUMBER_ANIMATION_DURATION}
+                                        ></iai-animated-number>
+                                        %
+                                    </div>
+
+                                    <iai-progress-bar
+                                        .value=${this.getPercentage(theme.mentions, this.totalResponses)}
+                                        .label=${""}
+                                    ></iai-progress-bar>
+                                </div>
+                            `,
+                            "Actions": x`
+                                <iai-silver-button
+                                    .text=${x`
+                                        <iai-icon
+                                            .name=${"search"}
+                                        ></iai-icon>
+                                        <span>View responses</span>
+                                    `}
+                                    .handleClick=${(e) => {
+                                        e.stopPropagation();
+                                        theme.handleClick();
+                                    }}
+                                ></iai-silver-button>
+                            `
+                        }
+                    ))
+                }
+            ></iai-data-table>
+        `;
+    }
+}
+customElements.define("iai-themes-table", ThemesTable);
+
+class ThemeFiltersWarning extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        themes: { type: Array },
+        themeFilters: { type: Array },
+        updateThemeFilters: { type: Function },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-theme-filters-warning .theme-tag .material-symbols-outlined {
+                font-size: 1.3em;
+            }
+            iai-theme-filters-warning iai-silver-button button {
+                width: max-content;
+                display: flex;
+                align-items: center;
+                padding-inline: 0.5em;
+                gap: 0.5em;
+                font-weight: bold;
+                color: var(--iai-silver-color-text);
+            }
+            iai-theme-filters-warning iai-silver-tag {
+                width: 100%;
+                display: block;
+                margin-bottom: 1em;
+            }
+            iai-theme-filters-warning .tag-container iai-silver-tag {
+                width: auto;
+                margin: 0;
+            }
+            iai-theme-filters-warning iai-silver-tag .tag-container {
+                display: flex;
+                gap: 0.5em;
+                align-items: center;
+                flex-wrap: wrap;
+            }
+            iai-theme-filters-warning iai-silver-tag .theme-tag {
+                display: flex;
+                gap: 0.5em;
+                font-size: 1.2em;
+                align-items: center;
+            }
+            iai-theme-filters-warning iai-silver-tag .theme-tag iai-icon-button {
+                margin-top: 0.1em;
+            }
+            iai-theme-filters-warning iai-silver-tag .tag {
+                width: 100%;
+            }
+            iai-theme-filters-warning iai-silver-button button {
+                width: max-content;
+                display: flex;
+                align-items: center;
+                padding-inline: 0.5em;
+                gap: 0.5em;
+                font-weight: bold;
+                color: var(--iai-silver-color-text);
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        this.themes = [];
+        this.themeFilters = [];
+        this.updateThemeFilters = () => {};
+
+        this.applyStaticStyles("iai-theme-filters-warning", ThemeFiltersWarning.styles);
+    }
+    
+    render() {
+        return x`
+            <iai-silver-tag
+                .status=${"Analysing"}
+                .icon=${"report"}
+                .text=${`Selected themes (${this.themeFilters.length})`}
+                .subtext=${x`
+                    <div class="tag-container">
+                        ${this.themeFilters.map(themeFilter => x`
+                        <iai-silver-tag
+                            .text=${x`
+                                <div class="theme-tag">
+                                    ${this.themes.find(theme => theme.id == themeFilter).title}
+
+                                    <iai-icon-button .handleClick=${() => this.updateThemeFilters(themeFilter)}>
+                                        <iai-icon
+                                            slot="icon"
+                                            .name=${"close"}
+                                        ></iai-icon>
+                                    </iai-icon-button>
+                                    
+                                </div>`}
+                        ></iai-silver-tag>
+                        `)}
+
+                        <iai-silver-button
+                            .text=${"Clear all"}
+                            .handleClick=${() => this.updateThemeFilters()}
+                        ></iai-silver-button>
+                    </div>
+                `}
+            >
+            </iai-silver-tag>
+        `;
+    }
+}
+customElements.define("iai-theme-filters-warning", ThemeFiltersWarning);
+
+class MultiDropdown extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        title: { type: String },
+        text: { type: String },
+        options: { type: Array }, //  { id, checked, title, handleClick }
+
+        _panelVisible: { type: Boolean },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-multi-dropdown label,
+            iai-multi-dropdown select,
+            iai-multi-dropdown input {
+                //font-size: 0.9em !important;
+            }
+            iai-multi-dropdown label {
+                cursor: pointer;
+                word-break: break-word;
+                line-height: 1.5em;
+            }
+            iai-multi-dropdown .filters {
+                display: flex;
+                gap: 1em;
+                width: 100%;
+                flex-direction: column;
+            }
+            iai-multi-dropdown input[type="checkbox"] {
+                width: auto;
+                filter: grayscale(0.5) hue-rotate(75deg);
+                cursor: pointer;
+            }
+
+            iai-multi-dropdown ul {
+                list-style: none;
+                padding-left: 0;
+                margin: 0;
+            }
+            iai-multi-dropdown ul li {
+                display: flex;
+                gap: 0.5em;
+                justify-content: flex-start;
+                margin-bottom: 0.5em;
+            }
+            
+            iai-multi-dropdown .popup-button .popup-panel {
+                position: absolute;
+                top: 2em;
+                width: max-content;
+                max-width: 80vw;
+                max-height: 20em;
+                overflow: auto;
+                right: 0;
+                background: white;
+                padding: 1em;
+                margin: 0;
+                z-index: 2;
+                border: 1px solid var(--iai-silver-color-mid);
+                border-radius: 0.5em;
+                opacity: 1;
+                transition: opacity 0.3s ease-in-out;
+                box-shadow: rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px;
+            }
+            iai-multi-dropdown .popup-button {
+                position: relative;
+            }
+            iai-multi-dropdown .popup-button .popup-panel.left-placement {
+                right: unset;
+                left: 0;
+            }
+            iai-multi-dropdown .popup-panel .content {
+                display: flex;
+                align-items: center;
+                gap: 1em;
+            }
+            iai-multi-dropdown .popup-button .icon-container {
+                margin-bottom: 0.5em;
+            }
+            iai-multi-dropdown .popup-button iai-silver-title {
+                color: var(--iai-silver-color-dark);
+                cursor: pointer;
+            }
+            iai-multi-dropdown .popup-button .popup-button__body {
+                position: relative;
+            }
+            iai-multi-dropdown .popup-button .popup-button__body iai-silver-button button {
+                width: 100%;    
+                line-height: 2em;
+                background: var(--iai-silver-color-light);
+                border: none;
+                border-radius: 0.3em;
+            }
+            iai-multi-dropdown .popup-button .popup-button__text {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 0.5em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.title = "";
+        this.text = "";
+        this.options = [];
+
+        this._panelVisible = false;
+        this._leftPlacement = false;
+        
+        this.applyStaticStyles("iai-multi-dropdown", MultiDropdown.styles);
+    }
+
+    handleOutsideClick = (e) => {
+        if (!this.contains(e.target)) {
+            this._panelVisible = false;
+        }
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.setupPanelListeners(window.addEventListener);    }
+
+    disconnectedCallback() {
+        this.setupPanelListeners(window.removeEventListener);
+        super.disconnectedCallback();
+    }
+
+    setupPanelListeners = (func) => {
+        ["click", "touchstart"].forEach(eventName => {
+            func(eventName, this.handleOutsideClick);
+        });
+    }
+
+    isLeftPlaced = () => {
+        const buttonEl = this.querySelector("iai-silver-button");
+        if (!buttonEl) {
+            return;
+        }
+
+        const rect = buttonEl.getBoundingClientRect();
+
+        const elementCenter = rect.left + rect.width / 2;
+        const screenCenter = window.innerWidth / 2;
+
+        return elementCenter < screenCenter;
+    }
+
+    willUpdate(changedProps) {
+        if (changedProps.has("_panelVisible")) {
+            this._leftPlacement = this.isLeftPlaced();
+        }
+    }
+
+    render() {
+        return x`
+            <div class="popup-button">
+                <iai-silver-title
+                    .level=${3}
+                    .text=${this.title}
+                    @click=${() => this._panelVisible = !this._panelVisible}
+                ></iai-silver-title>
+
+                <div class="popup-button__body">
+                    <iai-silver-button
+                        .text=${x`
+                            <div class="popup-button__text">
+                                <span>
+                                    ${this.text}
+                                </span>
+                                <iai-icon
+                                    .name=${"keyboard_arrow_down"}
+                                ></iai-icon>
+                            </div>
+                        `}
+                        .handleClick=${() => this._panelVisible = !this._panelVisible}
+                    ></iai-silver-button>
+
+                    ${this.options.length > 0 ? x`
+                        <div
+                            class=${"popup-panel" + (this._leftPlacement ? " left-placement" : "")}
+                            style=${`
+                                opacity: ${this._panelVisible ? 1 : 0};
+                                pointer-events: ${this._panelVisible ? "auto" : "none"};
+                            `}
+                        >
+                            <div class="content">
+                                <ul>
+                                    ${this.options.map(option => {
+                                        const optionId = `${this.contentId}-${option.id.replace(" ", "-")}`;
+
+                                        return x`
+                                            <li>
+                                                <input
+                                                    type="checkbox"
+                                                    class="theme-checkbox"
+                                                    id=${optionId}
+                                                    name=${`multi-dropdown-${this.contentId}`}
+                                                    .value=${option.id}
+                                                    .checked=${option.checked}
+                                                    @click=${option.handleClick}
+                                                />
+                                                <label for=${optionId}>
+                                                    ${option.title}
+                                                </label>
+                                            </li>
+                                        `}
+                                    )}
+                                </ul>
+                            </div>
+                        </div>
+                    ` : ""}
+                </div>
+                
+            </div>
+        `
+    }
+}
+customElements.define("iai-multi-dropdown", MultiDropdown);
+
+class ThemeAnalysis extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        consultationSlug: { type: String },
+        themes: { type: Array },
+        demoData: { type: Object },
+        demoOptions: { type: Object },
+        totalResponses: { type: Number },
+
+        demoFiltersApplied: { type: Function },
+        themeFiltersApplied: { type: Function },
+
+        themeFilters: { type: Array },
+        updateThemeFilters: { type: Function },
+
+        sortType: { type: String },
+        setSortType: { type: Function },
+
+        sortDirection: { type: String },
+        setSortDirection: { type: Function },
+
+        demoFilters: { type: Object },
+        setDemoFilters: { type: Function },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-theme-analysis div[slot="content"] {
+                padding-block: 0.5em;
+            }
+            iai-theme-analysis iai-silver-icon-tile {
+                font-size: 0.8em;
+            }
+            iai-theme-analysis .theme-title {
+                font-weight: bold;
+                color: var(--iai-silver-color-text);
+            }
+            iai-theme-analysis .percentage-cell {
+                gap: 0.5em;
+                display: flex;
+                align-items: center;
+            }
+            iai-theme-analysis .percentage-cell iai-progress-bar {
+                flex-grow: 1;
+            }
+            iai-theme-analysis .percentage-cell iai-progress-bar .container {
+                border-radius: 0.5em;
+                background: var(--iai-silver-color-mid);
+                border: none;
+                opacity: 0.7;
+            }
+            iai-theme-analysis .percentage-cell iai-progress-bar .bar {
+                height: 0.5em;
+                border-top-left-radius: 0.5em;
+                border-bottom-left-radius: 0.5em;
+                background: var(--iai-silver-color-dark);
+            }
+            iai-theme-analysis .percentage-cell iai-progress-bar .bar.full {
+                border-radius: 0.5em;
+            }
+            iai-theme-analysis iai-silver-button button {
+                width: max-content;
+                display: flex;
+                align-items: center;
+                padding-inline: 0.5em;
+                gap: 0.5em;
+                font-weight: bold;
+                color: var(--iai-silver-color-text);
+            }
+            iai-theme-analysis .filters-row {
+                display: grid;
+                gap: 1em;
+            }
+            iai-theme-analysis .total-themes {
+                display: flex;
+                flex-direction: column;    
+                max-height: max-content;
+                padding: 1em;
+                font-size: 0.8em;
+                white-space: nowrap;
+                background: #fcf1f6;
+                border-radius: 0.5em;
+            }
+            iai-theme-analysis .total-themes span {
+                font-size: 1.5em;
+                font-weight: bold;
+            }
+            iai-theme-analysis .filters-row {
+                margin-bottom: 1em;
+                background: var(--iai-silver-color-light);
+                padding: 1em;
+                border-radius: 0.5em;
+            }
+            iai-theme-analysis .filters {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 1em;
+                align-items: center;
+            }
+            iai-theme-analysis .filters iai-silver-select-input{
+                white-space: nowrap;
+            }
+            iai-theme-analysis .top-panel {
+                margin-bottom: 2em;
+            }
+            iai-theme-analysis .filters select.govuk-select {
+                font-size: 0.9em;
+                background: var(--iai-silver-color-light-darker);
+            }
+            iai-theme-analysis iai-multi-dropdown button {
+                background: var(--iai-silver-color-light-darker) !important;
+            }
+            iai-theme-analysis .export-button button {
+                padding-block: 0.2em;
+            }
+            iai-theme-analysis .filters .demographics-title .icon-container {
+                margin: 0;
+                color: var(--iai-silver-color-dark);
+            }
+            iai-theme-analysis .filters .govuk-form-group:has(select){
+                margin: 0;
+            }
+            iai-theme-analysis .info-container {
+                display: flex;
+                justify-content: space-between;
+            }
+            @media (min-width: 40.0625em) {
+                .govuk-form-group {
+                    margin-bottom: 0;
+                }
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+        this._NUMBER_ANIMATION_DURATION = 1000;
+
+        this.themes = [];
+        this.demoData = {};
+        this.demoOptions = {};
+        this.totalResponses = 0;
+
+        this.demoFiltersApplied = () => {};
+        this.themeFiltersApplied = () => {};
+
+        this.themeFilters = [];
+        this.updateThemeFilters = () => {};
+
+        this.demoFilters = {};
+        this.setDemoFilters = () => {};
+        
+        this.sortType = "";
+        this.setSortType = () => {};
+
+        this.sortDirection = "";
+        this.setSortDirection = () => {};
+
+        this.applyStaticStyles("iai-theme-analysis", ThemeAnalysis.styles);
+    }
+
+    render() {
+        return x`
+            <iai-silver-panel>
+                <div slot="content">
+                    <div class="top-panel">
+                        <iai-silver-title
+                            .text=${"Theme analysis"}
+                            .variant=${"secondary"}
+                            .icon=${"lan"}
+                            .aside=${x`
+                                <iai-csv-download
+                                    .fileName=${`theme_mentions_for_${this.consultationSlug}.csv`}
+                                    .variant=${"silver"}
+                                    .data=${
+                                        this.themes.map(theme => ({
+                                            "Theme Name": theme.title,
+                                            "Theme Description": theme.description,
+                                            "Mentions": theme.mentions,
+                                            "Percentage": this.getPercentage(theme.mentions, this.totalResponses),
+                                        }))
+                                    }
+                                >
+                                </iai-csv-download>
+                            `}
+                        ></iai-silver-title>
+
+                        <div class="filters-row">
+                            <div class="filters">
+                                <iai-silver-select-input
+                                    .inputId=${"sort-value"}
+                                    .name=${"sort-value"}
+                                    .label=${"Sort by:"}
+                                    .hideLabel=${false}
+                                    .value=${this.sortType}
+                                    .options=${[
+                                        { value: "frequency", text: "Frequency" },
+                                        { value: "alphabetical", text: "A-Z" },
+                                    ]}
+                                    .handleChange=${(e) => this.setSortType(e.target.value)}
+                                    .horizontal=${true}
+                                ></iai-silver-select-input>
+
+                                <iai-icon-button .handleClick=${
+                                    () => this.setSortDirection(this.sortDirection === "ascending"
+                                        ? "descending"
+                                        : "ascending"
+                                )}>
+                                    <iai-icon
+                                        slot="icon"
+                                        .name=${this.sortDirection === "ascending"
+                                            ? "arrow_downward"
+                                            : "arrow_upward"
+                                        }
+                                    ></iai-icon>
+                                </iai-icon-button>
+                            </div>
+
+                            <div class="filters">
+                                ${Object.keys(this.demoOptions).map(category => {
+                                    return x`
+                                        <iai-multi-dropdown
+                                            .title=${category}
+                                            .text=${`${this.demoFilters[category]?.length || 0} filters selected`}
+                                            .options=${this.demoOptions[category].map(option => ({
+                                                id: option,
+                                                checked: Boolean(this.demoFilters[category]?.includes(option)),
+                                                title: option,
+                                                handleClick: (e) => {
+                                                    this.setDemoFilters(category, option);
+                                                },
+                                            }))}
+                                        ></iai-multi-dropdown>
+                                    `
+                                })}
+                            </div>
+
+                            ${this.themeFiltersApplied() || this.demoFiltersApplied() ? x`
+                                <iai-silver-button
+                                    .text=${"Clear filters"}
+                                    .handleClick=${() => {
+                                        this.updateThemeFilters();
+                                        this.setDemoFilters();
+                                    }}
+                                ></iai-silver-button>
+                            ` : ""}
+                        </div>
+
+                        ${this.themeFilters.length > 0 ? x`
+                            <iai-theme-filters-warning
+                                .themes=${this.themes}
+                                .themeFilters=${this.themeFilters}
+                                .updateThemeFilters=${this.updateThemeFilters}
+                            ></iai-theme-filters-warning>
+                        ` : ""}
+                        
+                        <div class="info-container">
+                            <small>
+                                Total Themes
+                                <span>${this.themes.length}<span>
+                            </small>
+
+                            <small>
+                                <!-- optional microcopy -->
+                            </small>
+                        </div>
+                    </div>
+
+                    <iai-themes-table
+                        .themes=${this.themes}
+                        .themeFilters=${this.themeFilters}
+                        .setThemeFilters=${this.updateThemeFilters}
+                        .totalResponses=${this.totalResponses}
+                    ></iai-themes-table>
+                </div>
+            </iai-silver-panel>
+        `;
+    }
+}
+customElements.define("iai-theme-analysis", ThemeAnalysis);
+
+class QuestionTitle extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        status: { type: String },
+        title: { type: String },
+        description: { type: String },
+        department: { type: String },
+        numResponses: { type: Number },
+        numQuestions: { type: Number },
+        numThemes: { type: Number },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-question-title {
+                color: var(--iai-silver-color-text);
+            }
+            iai-silver-question-title .topbar {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 1em;
+            }
+            iai-silver-question-title .topbar .tags {
+                display: flex;    
+                align-items: center;
+                gap: 0.5em;
+            }
+
+            iai-silver-question-title .tag {
+                padding: 0.3em 0.5em;
+            }
+
+            iai-silver-question-title .status {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                font-size: 0.8em;
+                color: white;
+                background: #85d07e;                
+                border-radius: 0.5em;
+            }
+            iai-silver-question-title .responses {
+                font-weight: bold;
+            }
+            iai-silver-question-title .department {
+                font-size: 0.8em;
+            }
+
+            iai-silver-question-title iai-silver-button button {
+                padding: 0.3em;
+                border: none;
+                font-size: 1.5em;
+            }
+            iai-silver-question-title .details {
+                display: flex;
+                align-items: center;
+                gap: 1em;
+                flex-wrap: wrap;
+                margin-top: 1em;
+            }
+            iai-silver-question-title .title-container {
+                display: flex;
+                justify-content:
+                space-between; gap: 1em;
+                line-height: 1.5em;
+            }
+            iai-silver-question-title [slot="content"] {
+                padding-block: 0.5em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.status = "";
+        this.title = "";
+        this.department = "";
+        this.numResponses = 0;
+
+        this.applyStaticStyles("iai-silver-question-title", QuestionTitle.styles);
+    }
+
+    getTagColor = (status) => {
+        switch (status) {
+            case this.CONSULTATION_STATUSES.open:
+                return {
+                    primary: "var(--iai-silver-color-teal)",
+                    secondary: "var(--iai-silver-color-teal-light)",
+                };
+            case this.CONSULTATION_STATUSES.analysing:
+                return {
+                    primary: "var(--iai-silver-color-teal)",
+                    secondary: "var(--iai-silver-color-teal-light)",
+                };
+            case this.CONSULTATION_STATUSES.completed:
+                return {
+                    primary: "var(--iai-silver-color-teal)",
+                    secondary: "var(--iai-silver-color-teal-light)",
+                };
+            case this.CONSULTATION_STATUSES.closed:
+                return {
+                    primary: "var(--iai-silver-color-teal)",
+                    secondary: "var(--iai-silver-color-teal-light)",
+                };
+        }
+    }
+
+    render() {
+        return x`
+            <style>
+                #${this.contentId} .tag.status {
+                    color: ${this.getTagColor(this.status).primary};
+                    background: ${this.getTagColor(this.status).secondary};
+                    border: 1px solid ${this.getTagColor(this.status).primary};
+                }
+            </style>
+            <iai-silver-panel id=${this.contentId}>
+                <div slot="content">
+                    <div class="title-container">
+                        <iai-silver-title
+                            .text=${this.title}
+                            .level=${2}
+                        ></iai-silver-title>
+
+                        <iai-silver-button
+                            .text=${x`
+                                <iai-icon
+                                    .name=${"star"}
+                                    .color=${"var(--iai-silver-color-text)"}
+                                ></iai-icon>
+                            `}
+                            .handleClick=${() => console.log("button clicked")}
+                        ></iai-silver-button>
+                    </div>
+
+                    <div class="details">
+                        <small class="responses">
+                            ${this.numResponses.toLocaleString()} responses
+                        </small>
+
+                        <span class="tag status">
+                            ${this.status}
+                        </span>
+
+                        <small class="department">
+                            ${this.department}
+                        </small>
+                    </div>
+                </div>
+            </iai-silver-panel>
+        `
+    }
+}
+customElements.define("iai-silver-question-title", QuestionTitle);
+
+class TabView extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        tabs: { type: Array },
+        activeTab: { type: String },
+        handleTabChange: { type: Function },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-tab-view nav {
+                display: flex;
+                max-width: max-content;
+                margin: auto;
+                margin-bottom: 1em;
+                border-radius: 10em;
+                font-size: 0.9em;
+                background: var(--iai-silver-color-mid-light);
+            }
+            iai-tab-view .tab-button {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 0.5em;
+                margin: 0.3em;
+                padding: 0.5em;
+                border-radius: 10em;
+                list-style: none;
+                text-align: center;
+                font-size: 0.9em;
+                color: var(--iai-silver-color-dark);
+                transition: 0.3s ease-in-out;
+                cursor: pointer;
+            }
+            iai-tab-view .tab-button:hover {
+                background: var(--iai-silver-color-light);
+            }
+            iai-tab-view .tab-button.active {
+                color: var(--iai-silver-color-dark);
+                background: white;
+            }
+            iai-tab-view .tab-button .material-symbols-outlined {
+                font-size: 1.3em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        console.log(this.tabs);
+        this.tabs = [];
+        this.activeTab = 0;
+        this.handleTabChange = () => {};
+
+        this.applyStaticStyles("iai-tab-view", TabView.styles);
+    }
+
+    render() {
+        return x`
+            <nav>
+                ${this.tabs.map((tab, index) => x`
+                    <li
+                        role="button"
+                        tabindex="0"
+                        class=${"tab-button" + (this.activeTab === index ? " active" : "")}
+                        @click=${() => this.handleTabChange(index)}
+                    >
+                        ${tab.title}
+                    </li>
+                `)}
+            </nav>
+            <div>
+                ${this.tabs.map((tab, index) => x`
+                    <section class=${this.activeTab === index ? "" : "visually-hidden"}>
+                        ${tab.content}
+                    </section>
+                `)}
+            </div>
+        `;
+    }
+}
+customElements.define("iai-tab-view", TabView);
+
+class CrossSearch extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        searchValue: { type: String },
+        searchMode: { type: String },
+        searchType: { type: String },
+        searchHighlight: { type: Boolean },
+        _settingsVisible: { type: Boolean },
+
+        results: { type: Array },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-cross-search {
+                color: var(--iai-silver-color-text);
+            }
+            iai-silver-cross-search section {
+                margin-block: 2em;
+            }
+            iai-silver-cross-search .govuk-form-group {
+                margin: 0;
+            }
+
+            iai-silver-cross-search .cards {
+                display: flex;
+                gap: 1em;
+                justify-content: space-between;
+                margin-block: 2em;
+            }
+            iai-silver-cross-search .cards iai-silver-card {
+                width: 23%;
+            }
+
+
+            iai-silver-cross-search div[slot="content"] {
+                padding: 1em;
+            }
+            iai-silver-cross-search .inputs {
+                display: flex;
+                justify-content: space-between;
+                gap: 1em;
+                margin-block: 0.5em;
+                flex-wrap: wrap;
+            }
+            iai-silver-cross-search div[slot="content"] .info {
+                display: flex;
+                gap: 0.5em;
+                margin-top: 0.5em;
+            }
+            iai-silver-cross-search small {
+                display: flex;
+                align-items: center;
+                font-size: 0.8em;
+            }
+            iai-silver-cross-search .inputs .group {
+                display: flex;
+                gap: 1em;
+                flex-wrap: wrap;
+                position: relative;
+            }
+            iai-silver-cross-search .inputs .popup {
+                position: absolute;
+                top: 2em;
+                width: max-content;
+                right: 0;
+                background: white;
+                padding: 1em;
+                margin: 0;
+                z-index: 2;
+                border: 1px solid var(--iai-silver-color-mid);
+                border-radius: 0.5em;
+                opacity: 1;
+                transition: opacity 0.3s ease-in-out;
+                box-shadow: rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px;
+            }
+            iai-silver-cross-search .inputs iai-icon-button button:hover {
+                background-color: var(--iai-silver-color-light);
+            }
+           
+            iai-silver-cross-search iai-silver-search-box {
+                flex-grow: 1;
+            }
+            
+            iai-silver-cross-search ul.results-list {
+                display: flex;
+                flex-direction: column;
+                gap: 1.5em;
+                list-style: none;
+                padding-left: 0;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.searchValue = "";
+        this.searchMode = "keyword";
+        this.searchType = "all";
+        this.searchHighlight = true;
+        this._settingsVisible = false;
+
+        this.results = [
+            {
+                title: "DGSF air quality consultation",
+                description: "Public consultation on air quality improvement measures and policy recommendations for local communities.",
+                type: "question",
+            },
+            {
+            
+                title: "Future of Transport Strategy",
+                description: "Consultation on sustainable transport infrastructure and policies for the next decade.",
+                type: "response",
+            },
+            {
+                title: "Digital Services Accessibility Standards",
+                description: "Review of accessibility requirements for government digital services and public websites.",
+                type: "question",
+            },
+            {
+                title: "Social Housing Policy Review",
+                description: "Comprehensive review of social housing policies and affordable housing provision.",
+                type: "response",
+            },
+        ];
+
+        this.applyStaticStyles("iai-silver-cross-search", CrossSearch.styles);
+    }
+
+    shouldDisplay = (result) => {
+        if (this.searchValue && (
+            !result.title.toLocaleLowerCase().includes(this.searchValue.toLocaleLowerCase()) &&
+            !result.description.toLocaleLowerCase().includes(this.searchValue.toLocaleLowerCase())
+        )) {
+            return false;
+        }
+
+        if (this.searchType !== "all" && (
+            this.searchType !== result.type
+        )) {
+            return false;
+        }
+        return true;
+    }
+
+    render() {
+        return x`
+            <section>
+                <iai-silver-panel>
+                    <div slot="content">
+                        <div class="inputs">
+                            <div class="group">
+                                <iai-silver-select-input
+                                    .inputId=${"search-mode"}
+                                    .name=${"search-mode"}
+                                    .label=${"Search:"}
+                                    .hideLabel=${false}
+                                    .value=${this.searchMode}
+                                    .options=${[
+                                        { value: "keyword", text: "Keyword" },
+                                        { value: "semantic", text: "Semantic" },
+                                    ]}
+                                    .handleChange=${(e) => this.searchMode = e.target.value}
+                                    .horizontal=${true}
+                                ></iai-silver-select-input>
+
+                                <iai-silver-select-input
+                                    .inputId=${"search-type"}
+                                    .name=${"search-type"}
+                                    .label=${"Show:"}
+                                    .hideLabel=${false}
+                                    .value=${this.searchType}
+                                    .options=${[
+                                        { value: "all", text: "All Types" },
+                                        { value: "question", text: "Questions" },
+                                        { value: "response", text: "Responses" },
+                                    ]}
+                                    .handleChange=${(e) => this.searchType = e.target.value}
+                                    .horizontal=${true}
+                                ></iai-silver-select-input>
+                            </div>
+
+                            <div class="group">
+                                <iai-icon-button
+                                    title="Search settings"
+                                    @click=${() => this._settingsVisible = !this._settingsVisible}
+                                >
+                                    <iai-icon
+                                        slot="icon"
+                                        name="settings"
+                                        .color=${this._settingsVisible ? "var(--iai-silver-color-dark)" : "var(--iai-silver-color-text)"}
+                                        .fill=${1}
+                                    ></iai-icon>
+                                </iai-icon-button>
+
+                                <div class="popup" style=${`opacity: ${this._settingsVisible ? 1 : 0}; pointer-events: ${this._settingsVisible ? "auto" : "none"};`}>
+                                    <iai-silver-title
+                                        .text=${"Search Settings"}
+                                        .variant=${"secondary"}
+                                    ></iai-silver-title>
+                                    <div style="display: flex; align-items: center; gap: 1em;">
+                                        <iai-toggle-input
+                                            style="margin-top: 1em;"
+                                            name=${"highligh-matches"}
+                                            .handleChange=${(e) => {
+                                                console.log(e.target.value);
+                                                this.searchHighlight = !this.searchHighlight;
+                                            }}
+                                            inputId=${"highligh-matches-toggle"}
+                                            label=${"Highlight Matches"}
+                                            value=${this.searchHighlight}
+                                            .checked=${this.searchHighlight}
+                                        ></iai-toggle-input>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <iai-silver-search-box
+                            .inputId=${"default-search"}
+                            .name=${"default-search"}
+                            .label=${"Search"}
+                            .placeholder=${this.searchMode == "keyword"
+                                ? "Search by keywords in questions, themes or descriptions..."
+                                : "Search by concepts like 'pollution sources', 'health effects', 'solutions'..."
+                            }
+                            .value=${this.searchValue}
+                            .handleInput=${(e) => this.searchValue = e.target.value.trim()}
+                        ></iai-silver-search-box>
+
+                        ${this.searchMode === "semantic"
+                            ? x`
+                                <div class="info">
+                                    <iai-icon
+                                        .name=${"wand_stars"}
+                                    ></iai-icon>
+                                    <small>AI understands the meaning of your search</small>
+                                </div>
+                            `
+                            : ""
+                        }
+
+                        <ul class="results-list">
+                            ${this.results
+                                .filter(result => this.shouldDisplay(result))
+                                .map(result => x`
+                                    <li>
+                                        <iai-silver-cross-search-card
+                                            .type=${result.type}
+                                            .title=${result.title}
+                                            .description=${result.description}
+                                            .tags=${["test tag 1", "test tag 2","test tag 1 test tag 1 test tag 1", "test tag 2","test tag 1", "test tag 2","test tag 1", "test tag 2","test tag 1", "test tag 2","test tag 1 test tag 1", "test tag 2","test tag 1", "test tag 2"]}
+                                            .highlightText=${this.searchHighlight ? this.searchValue : ""}
+                                        ></iai-silver-cross-search-card>
+                                    </li>
+                                `)
+                            }
+                        </ul>
+                    </div>
+                </iai-silver-panel>
+            </section>
+        `
+    }
+}
+customElements.define("iai-silver-cross-search", CrossSearch);
+
+class ProgressBar extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        value: { type: Number },
+        variant: { type: String }, //  "primary" | "secondary"
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-progress-bar {
+                flex-grow: 1;
+            }
+            iai-silver-progress-bar iai-progress-bar .container {
+                border-radius: 0.5em;
+                background: var(--iai-silver-color-mid);
+                border: none;
+                opacity: 0.7;
+            }
+            iai-silver-progress-bar .bar {
+                height: 0.5em;
+                border-top-left-radius: 0.5em;
+                border-bottom-left-radius: 0.5em;
+                background: var(--iai-silver-color-dark);
+            }
+            iai-silver-progress-bar iai-progress-bar.primary .bar {
+                background: var(--iai-silver-color-accent);
+            }
+            iai-silver-progress-bar iai-progress-bar.primary .container {
+                background: var(--iai-silver-color-mid-light);
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        this.value = 0;
+        this.variant = "primary";
+        
+        this.applyStaticStyles("iai-silver-progress-bar", ProgressBar.styles);
+    }
+
+    render() {
+        return x`
+            <iai-progress-bar
+                class=${this.variant === "primary" ? "primary" : "secondary"}
+                .value=${this.value}
+                .label=${""}
+            ></iai-progress-bar>
+        `;
+    }
+}
+customElements.define("iai-silver-progress-bar", ProgressBar);
+
+class DemographicsCard extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        title: { type: String },
+        data: { type: Object }, //  key/value pairs
+        _totalCount: { type: Number },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-demographics-card article {
+                height: 100%;
+                max-height: 40em;
+                overflow: auto;
+                padding: 1em;
+                font-size: 1em;
+                color: var(--iai-silver-color-text);
+                background: var(--iai-silver-color-light);
+                border-radius: 0.5em;
+            }
+            iai-demographics-card ul {
+                display: flex;
+                flex-direction: column;
+                gap: 1.5em;
+                margin: 0;
+                padding-left: 0;
+                font-weight: bold;
+                font-size: 0.9em;
+            }
+            iai-demographics-card li {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-direction: column;
+                list-style: none;
+                line-height: 1.5em;
+                gap: 0.5em;
+            }
+            iai-demographics-card li>* {
+                width: 100%;
+                word-wrap: break-word;
+            }
+            iai-demographics-card li .percentage {
+                font-size: 0.8em;
+                color: rgba(0, 0, 0, 0.5);
+            }
+            iai-demographics-card li .count {
+                font-size: 1.2em;
+            }
+            iai-demographics-card li {
+                font-size: 0.9em;
+                color: rgba(0, 0, 0, 0.6);
+            }
+            iai-demographics-card .info {
+                display: flex;
+                gap: 0.5em;
+            }
+            iai-demographics-card .label {
+                font-size: 0.9em;
+            }
+            iai-demographics-card .counts {
+                display: flex;
+                align-items: center;
+                gap: 1em;
+                font-weight: normal;
+                font-size: 0.8em;
+            }
+            
+            iai-demographics-card iai-silver-progress-bar .container,
+            iai-demographics-card iai-silver-progress-bar .container .bar {
+                height: 0.6em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.data = {};
+        this._totalCount = 0;
+        
+        this.applyStaticStyles("iai-demographics-card", DemographicsCard.styles);
+    }
+
+    updated(changedProps) {
+        if (changedProps.has("data")) {
+            this._totalCount = Object.values(this.data).reduce( (a, b) => a + b, 0 );
+        }
+    }
+
+    render() {
+        return x`
+            <article>
+                <iai-silver-title
+                    .text=${this.title}
+                    .level=${3}
+                ></iai-silver-title>
+
+                <ul>
+                    ${Object.keys(this.data).map(key => {
+                        const label = key;
+                        const count = this.data[key];
+                        const percentage = this.getPercentage(count, this._totalCount);
+
+                        return x`
+                            <li>
+                                <div class="info">
+                                    <span class="label">
+                                        ${label}
+                                    </span>
+                                    <span class="count">
+                                        ${count.toLocaleString()}
+                                    </span>
+                                    <span class="percentage">
+                                        ${percentage}%
+                                    </span>
+                                </div>
+
+                                <div>
+                                    <iai-silver-progress-bar
+                                        .value=${percentage}
+                                    ></iai-silver-progress-bar>
+                                </div>
+                            </li>
+                        `
+                    })}
+                </ul>
+            </article>
+        `
+    }
+}
+customElements.define("iai-demographics-card", DemographicsCard);
+
+class DemographicsSection extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        data: { type: Array },
+        themeFilters: { type: Array },
+        demoFilters: { type: Object},
+        total: { type: Number },
+
+        demoFiltersApplied: { type: Function },
+        themeFiltersApplied: { type: Function },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4` 
+            iai-demographics-section .cards {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 1em;
+                max-width: 100%;
+                overflow: auto;
+            }    
+            iai-demographics-section iai-demographics-card {
+                flex-grow: 1;
+                max-width: 100%;
+            }
+            .themes-warning .tag {
+                width: 100%;
+                margin-bottom: 1em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+        this._MAX_DEMO_ANSWERS = 10;
+
+        // Prop defaults
+        this.data = [];
+        this.themeFilters = [];
+        this.demoFilters = {};
+        this.total = 0;
+
+        this.demoFiltersApplied = () => {};
+        this.themeFiltersApplied = () => {};
+        
+        this.applyStaticStyles("iai-demographics-section", DemographicsSection.styles);
+    }
+
+    getFilterWarningText() {
+        const demoFiltersText = Object
+            .values(this.demoFilters)
+            .flat(1)
+            .filter(Boolean)
+            .join(", ");
+
+        const themeFiltersText = this.themeFilters.length
+            ? `${this.themeFilters.length} themes`
+            : "";
+
+        return [demoFiltersText, themeFiltersText].filter(Boolean).join(", ");
+    }
+
+    render() {
+        return x`
+            <iai-silver-panel>
+                <div slot="content">
+                    <div class="top-panel">
+                        <iai-silver-title
+                            .text=${"Demographics"}
+                            .subtext=${"Demographic breakdown for this question"}
+                            .icon=${"group"}
+                            .level=${2}
+                        ></iai-silver-title>
+
+                        ${this.themeFiltersApplied() || this.demoFiltersApplied()
+                            ? x`
+                                <iai-silver-tag
+                                    class="themes-warning"
+                                    .text=${"Active theme analysis filters"}
+                                    .subtext=${`Showing data for ${this.total.toLocaleString()} responses (filtered by: ${this.getFilterWarningText()})`}
+                                    .icon=${"report"}
+                                    .status=${"Analysing"}
+                                ></iai-silver-tag>
+                            `
+                            : ""
+                        }
+
+                        <div class="cards">
+                            ${Object.keys(this.data).map(category => {
+                                return Object.values(this.data[category]).length <= this._MAX_DEMO_ANSWERS
+                                    ? x`
+                                        <iai-demographics-card
+                                            .title=${this.toTitleCase(category)}
+                                            .data=${this.data[category]}
+                                        ></iai-demographics-card>
+                                    ` : ""})}
+                        </div>
+                    </div>
+                </div>
+            </iai-silver-panel>
+        `
+    }
+}
+customElements.define("iai-demographics-section", DemographicsSection);
+
+class ResponseRefinement extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        responses: { type: Array },
+        highlightMatches: { type: Boolean },
+        demoData: { type: Object },
+        demoOptions: { type: Object },
+        themes: { type: Array },
+
+        demoFiltersApplied: { type: Function },
+        themeFiltersApplied: { type: Function },
+
+        searchValue: { type: String },
+        setSearchValue: { type: Function },
+
+        searchMode: { type: Boolean },
+        setSearchMode: { type: Function },
+
+        evidenceRich: { type: Boolean },
+        setEvidenceRich: { type: Function },
+
+        highlightMatches: { type: Boolean },
+        setHighlightMatches: { type: Function },
+
+        demoFilters: { type: Object },
+        setDemoFilters: { type: Function },
+
+        themeFilters: { type: Array },
+        updateThemeFilters: { type: Function },
+
+        _settingsVisible: { type: Boolean },
+        _themeFiltersVisible: { type: Boolean },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-response-refinement label,
+            iai-response-refinement select,
+            iai-response-refinement input {
+                font-size: 0.9em !important;
+            }
+            iai-response-refinement .filters {
+                display: flex;
+                gap: 1em;
+                width: 100%;
+                flex-direction: column;
+            }
+            iai-response-refinement iai-silver-select-input {
+                display: block;
+                width: max-content;
+            }
+            iai-response-refinement .search-container {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 0.5em;
+            }
+            iai-response-refinement .search-container iai-silver-search-box {
+                flex-grow: 1;
+            }
+            iai-response-refinement .search-container iai-silver-search-box .clear-button {
+                top: 70%;
+            }
+            iai-response-refinement iai-silver-tag .material-symbols-outlined {
+                font-size: 2em;
+            }
+            iai-response-refinement .tag {
+                width: 100%;
+            }
+            iai-response-refinement input[type="checkbox"] {
+                width: auto;
+                filter: grayscale(0.5) hue-rotate(75deg);
+                cursor: pointer;
+            },
+            iai-response-refinement label {
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            iai-response-refinement .filters-row {
+                display: flex;
+                align-items: flex-end;
+                flex-wrap: wrap;
+                gap: 1em;
+            }
+            iai-response-refinement .theme-filter-list {
+                list-style: none;
+                padding-left: 0;
+                margin: 0;
+            }
+            iai-response-refinement .theme-filter-list li {
+                display: flex;
+                gap: 0.5em;
+                justify-content: flex-start;
+                margin-bottom: 0.5em;
+            }
+            iai-response-refinement iai-silver-select-input .govuk-form-group {
+                margin-bottom: 0;
+            }
+            iai-response-refinement iai-theme-filters-warning {
+                width: 100%;
+            }
+            iai-response-refinement .popup-button .popup-panel {
+                position: absolute;
+                top: 2em;
+                width: max-content;
+                right: 0;
+                background: white;
+                padding: 1em;
+                margin: 0;
+                z-index: 2;
+                border: 1px solid var(--iai-silver-color-mid);
+                border-radius: 0.5em;
+                opacity: 1;
+                transition: opacity 0.3s ease-in-out;
+                box-shadow: rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px;
+            }
+            iai-response-refinement .popup-button {
+                position: relative;
+            }
+            iai-response-refinement .popup-button .popup-panel.themes-panel {
+                right: unset;
+                left: 0;
+            }
+            iai-response-refinement .popup-panel .content {
+                display: flex;
+                align-items: center;
+                gap: 1em;
+            }
+            iai-response-refinement .popup-button .icon-container {
+                margin-bottom: 0.5em;
+            }
+            iai-response-refinement .popup-button iai-silver-title {
+                color: var(--iai-silver-color-dark);
+                cursor: pointer;
+            }
+            iai-response-refinement .popup-button .popup-button__body {
+                position: relative;
+            }
+            iai-response-refinement .popup-button .popup-button__body iai-silver-button button {
+                line-height: 2em;
+                background: var(--iai-silver-color-light);
+                border: none;
+                border-radius: 0.3em;
+            }
+            iai-response-refinement .popup-button .popup-button__text {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 0.5em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.demoData = {};
+        this.demoOptions = {};
+        this.themes = [];
+
+        this.demoFiltersApplied = () => {};
+        this.themeFiltersApplied = () => {};
+
+        this.searchValue = "";
+        this.setSearchValue = () => {};
+
+        this.searchMode = "keyword";
+        this.setSearchMode = () => {};
+
+        this.highlightMatches = true;
+        this.setHighlightMatches = () => {};
+
+        this.evidenceRich = false;
+        this.setEvidenceRich = () => {};
+
+        this.demoFilters = {};
+        this.setDemoFilters = () => {};
+
+        this.themeFilters = [];
+        this.updateThemeFilters = () => {};
+
+        this._settingsVisible = false;
+        this._themeFiltersVisible = false;
+        
+        this.applyStaticStyles("iai-response-refinement", ResponseRefinement.styles);
+    }
+
+    handleThemeFiltersBlur = (e) => {
+        if (!document.getElementById("theme-filters-panel").contains(e.target)) {
+            this._themeFiltersVisible = false;
+        }
+    }
+
+    handleSettingsBlur = (e) => {
+        if (!document.getElementById("settings-panel").contains(e.target)) {
+            this._settingsVisible = false;
+        }
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.setupPanelListeners(window.addEventListener);    }
+
+    disconnectedCallback() {
+        this.setupPanelListeners(window.removeEventListener);
+        super.disconnectedCallback();
+    }
+
+    setupPanelListeners = (func) => {
+        [this.handleSettingsBlur].forEach(eventHandler => {
+            ["click", "touchstart"].forEach(eventName => {
+                func(eventName, eventHandler);
+            });
+        });
+    }
+
+    render() {
+        return x`
+            <iai-silver-panel>
+                <div slot="content">
+                    <iai-silver-title
+                        .level=${2}
+                        .text=${`Response refinement`}
+                        .subtext=${"Filter and search through individual responses to this question."}
+                        .icon=${"filter_alt"}
+                        .aside=${x`
+                            ${this.demoFiltersApplied() || this.themeFiltersApplied() ? x`
+                                <iai-silver-button
+                                    .text=${"Clear filters"}
+                                    .handleClick=${() => {
+                                        this.updateThemeFilters();
+                                        this.setDemoFilters();
+                                    }}
+                                ></iai-silver-button>
+                            ` : ""}
+                        `}
+                    ></iai-silver-title>
+
+                    <div class="filters">
+                        <iai-silver-select-input
+                            .inputId=${"search-mode"}
+                            .name=${"search-mode"}
+                            .label=${"Search:"}
+                            .hideLabel=${false}
+                            .value=${this.searchMode}
+                            .options=${[
+                                { value: "keyword", text: "Keyword" },
+                                { value: "semantic", text: "Semantic" },
+                            ]}
+                            .handleChange=${(e) => this.setSearchMode(e.target.value)}
+                            .horizontal=${true}
+                        ></iai-silver-select-input>
+
+                        ${this.searchMode === "semantic" ? x`
+                            <iai-silver-tag
+                                .status=${"Open"}
+                                .icon=${"network_intelligence"}
+                                .text=${"Semantic search uses AI to understand the meaning behind your search terms, finding responses with similar concepts even if they don't contain the exact words."}
+                            ></iai-silver-tag>
+                        ` : ""}
+
+                        <div class="search-container">
+                            <iai-silver-search-box
+                                .inputId=${"search-value"}
+                                .name=${"search-value"}
+                                .label=${"Search"}
+                                .placeholder=${this.searchMode == "keyword"
+                                    ? "Search by keywords in questions, themes or descriptions..."
+                                    : "Search by concepts like 'pollution sources', 'health effects', 'solutions'..."
+                                }
+                                .value=${this.searchValue}
+                                .handleInput=${(e) => this.setSearchValue(e.target.value.trim())}
+                            ></iai-silver-search-box>
+
+                            <div id="settings-panel" class="popup-button">
+                                <div class="popup-button__body">
+                                    <iai-icon-button
+                                        title="Search settings"
+                                        @click=${() => this._settingsVisible = !this._settingsVisible}
+                                    >
+                                        <iai-icon
+                                            slot="icon"
+                                            name="settings"
+                                            .color=${this._settingsVisible ? "var(--iai-silver-color-dark)" : "var(--iai-silver-color-text)"}
+                                            .fill=${1}
+                                        ></iai-icon>
+                                    </iai-icon-button>
+
+                                    <div class="popup-panel" style=${`
+                                        opacity: ${this._settingsVisible ? 1 : 0};
+                                        pointer-events: ${this._settingsVisible ? "auto" : "none"};
+                                    `}>
+                                        <iai-silver-title
+                                            .text=${"Search Settings"}
+                                            .variant=${"secondary"}
+                                        ></iai-silver-title>
+                                        <div class="content">
+                                            <iai-toggle-input
+                                                name=${"highligh-matches"}
+                                                .handleChange=${(e) => {
+                                                    this.setHighlightMatches(!this.highlightMatches);
+                                                }}
+                                                inputId=${"highligh-matches-toggle"}
+                                                label=${"Highlight Matches"}
+                                                value=${this.highlightMatches}
+                                                .checked=${this.highlightMatches}
+                                            ></iai-toggle-input>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div >
+                            <iai-toggle-input
+                                name=${"evidence-rich"}
+                                .handleChange=${(e) => {
+                                    this.setEvidenceRich(!this.evidenceRich);
+                                }}
+                                inputId=${"evidence-rich-input"}
+                                label=${"Evidence-rich responses"}
+                                value=${this.evidenceRich}
+                                .checked=${this.evidenceRich}
+                            ></iai-toggle-input>
+                        </div>
+                        
+                        <div class="filters-row">
+                            ${Object.keys(this.demoOptions).map(key => x`
+                                <iai-multi-dropdown
+                                    .title=${this.toTitleCase(key)}
+                                    .text=${`${this.demoFilters[key]?.length || 0} filters selected`}
+                                    .options=${this.demoOptions[key].map(option => ({
+                                        id: option,
+                                        checked: Boolean(this.demoFilters[key]?.includes(option)),
+                                        title: option,
+                                        handleClick: (e) => {
+                                            this.setDemoFilters(key, e.target.value);
+                                        },
+                                    }))}
+                                ></iai-multi-dropdown>
+                            `)}
+                        </div>
+
+                        <div class="filters-row">
+                            <iai-multi-dropdown
+                                .title=${"Themes"}
+                                .text=${`${this.themeFilters.length} themes selected`}
+                                .options=${this.themes.map(theme => ({
+                                    id: theme.id,
+                                    checked: this.themeFilters.includes(theme.id),
+                                    title: theme.title,
+                                    handleClick: (e) => {
+                                        this.updateThemeFilters(theme.id);
+                                    },
+                                }))}
+                            ></iai-multi-dropdown>
+                        </div>
+
+                        <div class="filters-row">
+                            ${this.themeFilters.length > 0 ? x`
+                                <iai-theme-filters-warning
+                                    .themes=${this.themes}
+                                    .themeFilters=${this.themeFilters}
+                                    .updateThemeFilters=${this.updateThemeFilters}
+                                ></iai-theme-filters-warning>
+                            ` : ""}
+                        </div>
+                    </div>
+                </div>
+            </iai-silver-panel>
+        `
+    }
+}
+customElements.define("iai-response-refinement", ResponseRefinement);
+
+class ResponsesList extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+        responses: { type: Array },
+        responsesTotal: { type: Number },
+        filteredTotal: { type: Number },
+        handleScrollEnd: { type: Function },
+        isLoading: { type: Boolean },
+        highlightedText: { type: String },
+        handleThemeTagClick: { type: Function },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-silver-responses-list ul {
+                padding-left: 0;
+            }
+            iai-silver-responses-list li {
+                list-style: none;
+            }
+            iai-silver-responses-list article {
+                display: flex;
+                flex-direction: column;
+                gap: 1em;
+                width: 100%;
+                margin-block: 1em;
+                padding: 1em;
+                line-height: 1.5em;
+                background: var(--iai-silver-color-light);
+                border-radius: 0.5em;
+            }
+            iai-silver-responses-list article p {
+                margin: 0;
+            }
+            iai-silver-responses-list article .demo-tag {
+                max-width: 100%;
+            }
+            iai-silver-responses-list article .theme-tag button {
+                text-align: start;
+            }
+            iai-silver-responses-list article header,
+            iai-silver-responses-list article footer {
+                display: flex;
+                align-items: center;
+                gap: 0.5em;
+                font-size: 0.9em;
+                flex-wrap: wrap;
+            }
+            iai-silver-responses-list article header {
+                justify-content: space-between;
+            }
+            iai-silver-responses-list article header .header-group {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 0.5em;
+            }
+            iai-silver-responses-list article footer iai-silver-tag .tag {
+                background: var(--iai-silver-color-mid-light);
+                border: none;
+            }
+            iai-silver-responses-list iai-virtual-list {
+                height: 50em;
+            }
+            iai-silver-responses-list multi-answers-list {
+                display: flex;
+                gap: 0.5em;
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+
+        // Prop defaults
+        this.responses = [];
+        this.responsesTotal = 0;
+        this.filteredTotal = 0;
+        this.handleScrollEnd = () => {};
+        this.isLoading = false;
+        this.highlightedText = "";
+        this.handleThemeTagClick = () => {};
+        
+        this.applyStaticStyles("iai-silver-responses-list", ResponsesList.styles);
+    }
+
+    render() {
+        return x`
+            <iai-silver-panel>
+                <div slot="content">
+                    <iai-silver-title
+                        .text=${`Responses (${this.filteredTotal})`}
+                        .subtext=${"All responses to this question"}
+                        .level=${2}
+                    ></iai-silver-title>
+
+                    <iai-virtual-list
+                        style=${this.isLoading && this.responses.length === 0
+                            ? "height: auto;"
+                            : ""
+                        }
+                        .data=${this.responses}
+                        .renderItem=${(response, index) => x`
+                            <article class=${index === this.responses.length-1
+                                ? "last-item"
+                                : ""
+                            }>
+                                <header>
+                                    ${response.demoData.length > 0 || response.evidenceRich ? x`
+                                        <div class="header-group">
+                                            ${response.demoData
+                                                ? response.demoData.map(data => x`
+                                                    <iai-silver-tag
+                                                        class="demo-tag"
+                                                        .text=${data}
+                                                    ></iai-silver-tag>
+                                                `)
+                                                : ""
+                                            }
+                                            ${response.evidenceRich
+                                                ? x`
+                                                    <iai-silver-tag
+                                                        .icon=${"diamond"}
+                                                        .text=${"Evidence rich"}
+                                                        .status=${"Closed"}
+                                                    ></iai-silver-tag>
+                                                `
+                                                : ""
+                                            }
+                                        </div>
+                                    ` : ""}
+
+                                    <small>
+                                        ID: ${response.id || "Not Available"}
+                                    </small>
+                                </header>
+                                
+                                ${response.text ? x`
+                                    <p>
+                                        ${this.highlightedText
+                                            ? o$2(this.getHighlightedText(response.text, this.highlightedText))
+                                            : response.text
+                                        }
+                                    </p>
+                                ` : ""}
+
+                                ${response.multiAnswers.length > 0 ? x`
+                                    <ul class="multi-answers-list">
+                                        ${response.multiAnswers.map(answer => x`
+                                            <iai-silver-tag
+                                                .text=${answer}
+                                            ></iai-silver-tag>
+                                        `)}
+                                    </ul>
+                                ` : ""}
+                                
+                                ${response.themes.length > 0 ? x`
+                                    <footer>
+                                        <small>
+                                            Themes:
+                                        </small>
+                                        ${response.themes.map((theme) => x`
+                                            <iai-silver-button
+                                                class="theme-tag"
+                                                @click=${() => this.handleThemeTagClick(theme.id)}
+                                                .text=${theme.text}
+                                            ></iai-silver-button>
+                                        `)}
+                                    </footer>
+                                ` : ""}
+                            </article>
+                        `}
+                        .handleScrollEnd=${this.handleScrollEnd}
+                    ></iai-virtual-list>
+
+                    ${this.isLoading
+                        ? x`<iai-loading-indicator></iai-loading-indicator>`
+                        : ""
+                    }
+                </div>
+            </iai-silver-panel>
+        `
+    }
+}
+customElements.define("iai-silver-responses-list", ResponsesList);
+
+class QuestionDetailPage extends IaiLitBase {
+    static properties = {
+        ...IaiLitBase.properties,
+
+        _activeTab: { type: String },
+        _isLoading: { type: Boolean },
+        _currentPage: { type: Number},
+        _hasMorePages: { type: Boolean},
+        _errorOccured: { type: Boolean},
+        fetchData: { type: Function },
+        _isFavourited: { type: Boolean},
+
+        consultationSlug: { type: String },
+        questionSlug: { type: String },
+        consultationTitle: { type: String},
+        questionText: { type: String},
+        questionId: { type: String },
+
+        responses: { type: Array },
+        _responsesTotal: { type: Number },
+        _filteredTotal: { type: Number },
+        _themes: { type: Array },
+        _demoData: { type: Object },
+        _demoOptions: { type: Object },
+
+        _searchValue: { type: String },
+        _searchMode: { type: String },
+        _highlightMatches: { type: Boolean },
+        _evidenceRichFilter: { type: Boolean },
+        _themeFilters: { type: Array },
+        _demoFilters: { type: Object },
+
+        _themesSortType: { type: String },
+        _themesSortDirection: { type: String },
+    }
+
+    static styles = [
+        IaiLitBase.styles,
+        i$4`
+            iai-question-detail-page {
+                color: var(--iai-silver-color-text);
+            }
+            iai-question-detail-page select,
+            iai-question-detail-page input {
+                width: 100%;
+            }
+            iai-question-detail-page section {
+                margin-bottom: 1em;
+            }
+            iai-question-detail-page section.breadcrumbs {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 1em;
+            }
+            iai-question-detail-page section.breadcrumbs iai-silver-button button {
+                display: flex;
+                gap: 0.5em;
+                align-items: center;
+                justify-content: space-between;
+            }
+            iai-question-detail-page .response-total {
+                display: flex;
+                align-items: center;
+            }
+            iai-question-detail-page iai-icon-button {
+                margin-top: -0.4em;
+            }
+            iai-question-detail-page .load-more-button {
+                margin-top: 1em;
+                display: flex;
+                justify-content: center;
+            }
+            @media screen and (max-width: 500px) {
+                iai-question-detail-page section.breadcrumbs {
+                    justify-content: center;
+                }
+            }
+        `
+    ]
+
+    constructor() {
+        super();
+        this.contentId = this.generateId();
+        
+        this._MAX_THEME_FILTERS = Infinity;
+        this._PAGE_SIZE = 50;
+        this._DEBOUNCE_DELAY = 500;
+        this._TAB_INDECES = {
+            "Question Summary" : 0,
+            "Response Analysis" : 1,
+        };
+        this._currentFetchController = null;
+
+        // Prop defaults
+        this._activeTab = this._TAB_INDECES["Question Summary"];
+        this._isLoading = false;
+        this._currentPage = 1;
+        this._hasMorePages = true;
+        this._errorOccured = false;
+        this.fetchData = window.fetch.bind(window);
+        this._isFavourited = false;
+
+        this.consultationSlug = "";
+        this.questionSlug = "";
+        this.consultationTitle = "";
+        this.questionText = "";
+        this.questionId = "";
+
+        this.responses = [];
+        this._responsesTotal = 0;
+        this._filteredTotal = 0;
+        this._themes = [];
+        this._demoData = {};
+        this._demoOptions = {};
+        
+        this._searchValue = "";
+        this._searchMode = "keyword";
+        this._highlightMatches = true;
+        this._evidenceRichFilter = false;
+        this._themeFilters = [];
+        this._demoFilters = {};
+
+        this._themesSortType = "frequency"; // "frequency" | "alphabetical"
+        this._themesSortDirection = "descending"; // "ascending" | "descending"
+
+        this.applyStaticStyles("iai-question-detail-page", QuestionDetailPage.styles);
+    }
+
+    updateThemeFilters = (newFilter) => {
+        if (!newFilter) {
+            // Clear filters if newFilter is falsy
+            this._themeFilters = [];
+            return;
+        }
+        if (this._themeFilters.includes(newFilter)) {
+            this._themeFilters = [...this._themeFilters.filter(filter => filter !== newFilter)];
+        } else {
+            if (this._themeFilters.length === this._MAX_THEME_FILTERS) {
+                this._themeFilters = [...this._themeFilters.slice(1), newFilter];
+            } else {
+                this._themeFilters = [...this._themeFilters, newFilter];
+            }
+        }
+    }
+
+    buildQuery = () => {
+        // conditionally add filters as query params
+        const params = new URLSearchParams({
+            ...(this._searchValue && {
+                searchValue: this._searchValue
+            }),
+            ...(this._themeFilters.length > 0 && {
+                themeFilters: this._themeFilters.join(",")
+            }),
+            ...(this._searchMode && {
+                searchMode: this._searchMode
+            }),
+            ...(this._evidenceRichFilter && {
+                evidenceRich: this._evidenceRichFilter
+            }),
+            ...(this._themesSortType && {
+                themesSortType: this._themesSortType
+            }),
+            ...(this._themesSortDirection && {
+                themesSortDirection: this._themesSortDirection
+            }),
+            page: this._currentPage,
+            page_size: this._PAGE_SIZE.toString(),
+        });
+
+        // Filter out demo filter keys with no value
+        const validDemoFilterKeys = Object.keys(this._demoFilters).filter(key => Boolean(this._demoFilters[key]));
+        // Add each demo filter as a duplicate demoFilter param
+        for (const key of validDemoFilterKeys) {
+            const filterArr = this._demoFilters[key];
+            if (filterArr && filterArr.length > 0) {
+                // TODO: Replace below with the commented out code after the back end is implemented.
+                // Only processing the first filter for now to avoid breaking back end responses.
+                // params.append("demoFilters", `${key}:${filterArr.join(",")}`);
+                params.append("demoFilters", `${key}:${filterArr[0]}`);
+            }
+        }
+
+        return params.toString();
+    }
+
+    fetchResponses = async () => {
+        clearTimeout(this._searchDebounceTimer);
+
+        this._searchDebounceTimer = setTimeout(async () => {
+            if (!this._hasMorePages) {
+                return;
+            }
+
+            if (this._currentFetchController) {
+                console.log("aborting stale request");
+                this._currentFetchController.abort();
+            }
+
+            const controller = new AbortController();
+            const signal = controller.signal;
+            this._currentFetchController = controller;
+
+            this._errorOccured = false;
+            this._isLoading = true;
+
+            const url = `/consultations/${this.consultationSlug}/responses/${this.questionSlug}/json?` + this.buildQuery();
+
+            let response;
+            try {
+                response = await this.fetchData(url, { signal });
+            } catch (err) {
+                if (err.name == "AbortError") {
+                    console.log("stale request aborted");
+                    return;
+                } else {
+                    console.error(err);
+                    this._errorOccured = true;
+                    return;
+                }
+            } finally {
+                if (this._currentFetchController === controller) {
+                    this._currentFetchController = null;
+                }
+                this._isLoading = false;
+            }
+
+            if (!response.ok) {
+                this._errorOccured = true;
+                throw new Error(`Response status: ${response.status}`);
+            }
+
+            const responsesData = await response.json();
+
+            this.responses = this.responses.concat(responsesData.all_respondents);
+
+            this._responsesTotal = responsesData.respondents_total;
+            this._filteredTotal = responsesData.filtered_total;
+
+            this._themes = responsesData.theme_mappings.map(mapping => ({
+                id: mapping.value,
+                title: mapping.label,
+                description: mapping.description,
+                mentions: parseInt(mapping.count),
+                handleClick: () => {
+                    this._themeFilters = [mapping.value];
+                    this._activeTab = this._TAB_INDECES["Response Analysis"];
+                }
+            }));
+
+            this._demoData = responsesData.demographic_aggregations || {};
+            this._demoOptions = responsesData.demographic_options || {};
+
+            // Update theme mappings only on first page (when _currentPage === 1) to reflect current filters
+            if (this._currentPage === 1 && responsesData.theme_mappings) {
+                this.themeMappings = responsesData.theme_mappings;
+            }
+
+            this._hasMorePages = responsesData.has_more_pages;
+
+            this._currentPage = this._currentPage + 1;
+        }, this._DEBOUNCE_DELAY);
+    }
+
+    resetResponses = () => {
+        this.responses = [];
+        this._currentPage = 1;
+        this._hasMorePages = true;
+        this._isLoading = true;
+    }
+
+    demoFiltersApplied = () => {
+        for (const key of Object.keys(this._demoFilters)) {
+            const filterArr = this._demoFilters[key];
+
+            // filterArr can be undefined or empty array
+            if (filterArr && filterArr.filter(Boolean).length > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    themeFiltersApplied = () => {
+        return this._themeFilters.length > 0;
+    }
+
+    setDemoFilters = (newFilterKey, newFilterValue) => {
+        if (!newFilterKey || !newFilterValue) {
+            // Clear filters if nothing is passed
+            this._demoFilters = {};
+            return;
+        }
+
+        const existingFilters = this._demoFilters[newFilterKey] || [];
+
+        let resultFilters;
+        if (existingFilters.includes(newFilterValue)) {
+            // Remove filter if already added
+            resultFilters = existingFilters.filter(filter => newFilterValue !== filter);
+        } else {
+            // Avoid duplicates when adding filters
+            resultFilters = [...new Set([...existingFilters, newFilterValue])];
+        }
+
+        this._demoFilters = {
+            ...this._demoFilters,
+            [newFilterKey]: resultFilters,
+        };
+    }
+
+    firstUpdated() {
+        this._isFavourited = this.isFavourited();
+    }
+
+    updated(changedProps) {
+        if (
+            changedProps.has("_searchValue")        ||
+            changedProps.has("_searchMode")         ||
+            changedProps.has("_evidenceRichFilter") ||
+            changedProps.has("_themeFilters")       ||
+            changedProps.has("_demoFilters")        ||
+            changedProps.has("_themesSortType")     ||
+            changedProps.has("_themesSortDirection")
+        ) {
+            this.resetResponses();
+            this.fetchResponses();
+        }
+    }
+
+    isFavourited() {
+        return this.getStoredValues(this._STORAGE_KEYS.FAVOURITE_QUESTIONS).includes(this.questionId);
+    }
+
+    renderThemeAnalysisSection = () => {
+        return x`
+            <section>
+                <iai-demographics-section
+                    .data=${this._demoData}
+                    .themeFilters=${this._themeFilters}
+                    .demoFilters=${this._demoFilters}
+                    .demoFiltersApplied=${this.demoFiltersApplied}
+                    .themeFiltersApplied=${this.themeFiltersApplied}
+                    .total=${this._filteredTotal}
+                ></iai-demographics-section>
+            </section>
+            
+            <section class="theme-analysis">
+                <iai-theme-analysis
+                    .consultationSlug=${this.consultationSlug}
+                    .themes=${this._themes}
+                    .demoData=${this._demoData}
+                    .demoOptions=${this._demoOptions}
+                    .totalResponses=${this._filteredTotal}
+
+                    .demoFiltersApplied=${this.demoFiltersApplied}
+                    .themeFiltersApplied=${this.themeFiltersApplied}
+
+                    .themeFilters=${this._themeFilters}
+                    .updateThemeFilters=${this.updateThemeFilters}
+                    
+                    .sortType=${this._themesSortType}
+                    .setSortType=${newSortType => this._themesSortType = newSortType}
+
+                    .sortDirection=${this._themesSortDirection}
+                    .setSortDirection=${newSortDirection => this._themesSortDirection = newSortDirection}
+
+                    .demoFilters=${this._demoFilters}
+                    .setDemoFilters=${this.setDemoFilters}
+                ></iai-theme-analysis>
+            </section>
+        `
+    }
+
+    renderResponsesSection = () => {
+        return x`
+            <section>
+                <iai-response-refinement
+                    .demoData=${this._demoData}
+                    .demoOptions=${this._demoOptions}
+                    .themes=${this._themes}
+
+                    .demoFiltersApplied=${this.demoFiltersApplied}
+                    .themeFiltersApplied=${this.themeFiltersApplied}
+
+                    .searchValue=${this._searchValue}
+                    .setSearchValue=${newSearchValue => this._searchValue = newSearchValue}
+
+                    .searchMode=${this._searchMode}
+                    .setSearchMode=${newSearchMode => this._searchMode = newSearchMode}
+
+                    .evidenceRich=${this._evidenceRichFilter}
+                    .setEvidenceRich=${newEvidenceRich => this._evidenceRichFilter = newEvidenceRich}
+
+                    .highlightMatches=${this._highlightMatches}
+                    .setHighlightMatches=${newHighlightMatches => this._highlightMatches = newHighlightMatches}
+
+                    .demoFilters=${this._demoFilters}
+                    .setDemoFilters=${this.setDemoFilters}
+
+                    .themeFilters=${this._themeFilters}
+                    .updateThemeFilters=${this.updateThemeFilters}
+                ></iai-response-refinement>
+            </section>
+
+            <section>
+                <iai-silver-responses-list
+                    .responses=${
+                        this.responses.map(response => ({
+                            id: response.identifier,
+                            text: response.free_text_answer_text,
+                            themes: response.themes.map(theme => ({
+                                id: theme.id,
+                                text: theme.name,
+                            })),
+                            evidenceRich: response.evidenceRich,
+                            multiAnswers: response.multiple_choice_answer || [],
+                            demoData: Object.values(response.demographic_data) || [],
+                        }))
+                    }
+                    .handleScrollEnd=${() => {
+                        // // Uncomment to enable infinite scroll
+                        // if (this._isLoading) {
+                        //     return;
+                        // }
+                        // this.fetchResponses();
+                    }}
+                    .responsesTotal=${this._responsesTotal}
+                    .filteredTotal=${this._filteredTotal}
+                    .isLoading=${this._isLoading}
+                    .highlightedText=${this._highlightMatches ? this._searchValue : ""}
+                    .handleThemeTagClick=${(themeId) => {
+                        this.updateThemeFilters(themeId);
+                        this._activeTab = this._TAB_INDECES["Question Summary"];
+                    }}
+                ></iai-silver-responses-list>
+
+                ${this._hasMorePages ? x`
+                    <iai-silver-button
+                        class="load-more-button"
+                        .text=${`Load more (${this._filteredTotal - this.responses.length} remaining)`}
+                        .handleClick=${() => {
+                            if (this._isLoading) {
+                                return;
+                            }
+                            this.fetchResponses();
+                        }}
+                    ></iai-silver-button>`
+                : ""}
+            </section>
+        `
+    }
+
+    renderTabButton = (text, icon) => {
+        return x`
+            <iai-icon
+                .name=${icon}
+            ></iai-icon>
+            <span>
+                ${text}
+            </span>
+        `
+    }
+
+    render() {
+        return x`
+            <section class="breadcrumbs">
+                <iai-silver-button
+                    .text=${x`
+                        <iai-icon
+                            .name=${"chevron_left"}
+                            .color=${"var(--iai-silver-color-text)"}
+                        ></iai-icon>
+                        <span>Back to all questions</span>
+                    `}
+                    .handleClick=${() => window.location.href = `/consultations/${this.consultationSlug}/`}
+                ></iai-silver-button>
+
+                <small>
+                    Choose a different question to analyse
+                </small>
+            </section>
+
+            <section class="question-title">
+                <iai-silver-cross-search-card
+                    .type=${"question"}
+                    .title=${this.questionText}
+                    .aside=${x`
+                        <iai-icon-button
+                            class="favourite-button"
+                            title="Favourite this question"
+                            @click=${(e) => {
+                                e.stopPropagation();
+                                this.toggleStorage(
+                                    this.questionId,
+                                    this._STORAGE_KEYS.FAVOURITE_QUESTIONS
+                                );
+                                this._isFavourited = this.isFavourited();
+                            }}
+                        >
+                            <iai-icon
+                                slot="icon"
+                                name="star"
+                                .color=${"var(--iai-silver-color-text)"}
+                                .fill=${this._isFavourited ? 1 : 0}
+                            ></iai-icon>
+                        </iai-icon-button>
+                    `}
+                    .footer=${x`
+                        <small class="response-total">
+                            ${this._responsesTotal.toLocaleString()} responses
+                        </small>
+                        <iai-silver-tag
+                            .status=${"Open"}
+                            .text=${"Open"}
+                            .icon=${"chat_bubble"}
+                        ></iai-silver-tag>
+                    `}
+                ></iai-silver-cross-search-card>
+            </section>
+
+            <iai-tab-view
+                .activeTab=${this._activeTab}
+                .handleTabChange=${(newTab) => this._activeTab = newTab}
+                .tabs=${[
+                    {
+                        title: this.renderTabButton("Question summary", "lan"),
+                        content: this.renderThemeAnalysisSection()
+                    },
+                    {
+                        title: this.renderTabButton("Response analysis", "finance"),
+                        content: this.renderResponsesSection()
+                    },
+                ]}
+            ></iai-tab-view>
+        `
+    }
+}
+customElements.define("iai-question-detail-page", QuestionDetailPage);
 //# sourceMappingURL=index.js.map
