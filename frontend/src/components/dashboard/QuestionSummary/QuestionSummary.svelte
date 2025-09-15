@@ -67,6 +67,7 @@
             {demoOptions}
             {demoData}
             loading={themesLoading}
+            {totalAnswers}
         />
     </div>
 

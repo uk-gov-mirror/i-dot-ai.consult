@@ -18,6 +18,7 @@
         evidenceRich = false,
         setEvidenceRich = () => {},
         loading = true,
+        totalAnswers = 0,
     } = $props();
 
     // Derive to avoid calculating on re-render
@@ -75,6 +76,7 @@
                         {demoData}
                         {totalCounts}
                         skeleton={loading}
+                        {totalAnswers}
                     />
                 {/each}
             </div>

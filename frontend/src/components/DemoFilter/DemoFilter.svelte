@@ -18,6 +18,7 @@
         demoData?: DemoData;
         totalCounts?: DemoTotalCounts;
         skeleton?: boolean;
+        totalAnswers?: number;
     }
 
     let {
@@ -26,6 +27,7 @@
         demoData = {},
         totalCounts = {},
         skeleton = false,
+        totalAnswers = 0,
     }: Props = $props();
 
     let expanded = $state(true);
@@ -75,7 +77,7 @@
         {:else}
             {#each demoOptions[category] as rowKey}
                 {@const rowValue = demoData[category] && demoData[category][rowKey] || 0}
-                {@const percentage = getPercentage(rowValue, totalCounts[category])}
+                {@const percentage = getPercentage(rowValue, totalAnswers)}
 
                 {#if expanded}
                     <div transition:slide class="my-1">
