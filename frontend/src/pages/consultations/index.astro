@@ -4,8 +4,9 @@ import Section from '../../components/Section/Section.svelte';
 import Title from '../../components/Title.svelte';
 
 import ConsultationList from '../../components/screens/ConsultationList.svelte';
+import DrawerLayout from '../../layouts/DrawerLayout.astro';
 ---
-<Layout>
+<DrawerLayout>
 	<Section>
 		<Title level={1} text="Your consultations" />
 
@@ -13,4 +14,4 @@ import ConsultationList from '../../components/screens/ConsultationList.svelte';
 
 		<ConsultationList client:load />
 	</Section>
-</Layout>
+</DrawerLayout>
