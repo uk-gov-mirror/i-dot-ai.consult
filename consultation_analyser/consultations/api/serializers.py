@@ -1,5 +1,7 @@
 from typing import Any
 
+import boto3
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
@@ -28,7 +30,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ["id", "email", "has_dashboard_access", "is_staff", "created_at", "emails"]
 
     def to_internal_value(self, data):
-        if email := data.get( "email"):
+        if email := data.get("email"):
             data["email"] = email.lower()
 
         if emails := data.get("emails"):
@@ -92,9 +94,22 @@ class QuestionSerializer(serializers.HyperlinkedModelSerializer):
 class ConsultationSerializer(serializers.HyperlinkedModelSerializer):
     users = serializers.SlugRelatedField(slug_field="email", many=True, queryset=User.objects.all())
 
+    def validate_code(self, value):
+        s3 = boto3.client("s3")
+
+        s3_objects = s3.list_objects_v2(
+            Bucket=settings.AWS_BUCKET_NAME,
+            Prefix=f"app_data/consultations/{value}/",
+            Delimiter="/",
+        )
+
+        if s3_objects["KeyCount"] == 0:
+            raise ValidationError(detail=f"{value} not found in s3")
+        return value
+
     class Meta:
         model = Consultation
-        fields = ["id", "title", "slug", "stage", "users"]
+        fields = ["id", "title", "slug", "stage", "users", "code"]
 
 
 class DemographicOptionsSerializer(serializers.Serializer):

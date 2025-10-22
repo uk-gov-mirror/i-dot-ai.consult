@@ -2,6 +2,7 @@ import json
 
 import boto3
 import pytest
+from django.conf import settings
 from django.test import RequestFactory
 from moto import mock_aws
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -478,3 +479,25 @@ def alternative_theme(free_text_response):
     )
     yield theme
     theme.delete()
+
+
+@pytest.fixture(scope="function")
+def s3():
+    """
+    Return a mocked S3 client
+    """
+    with mock_aws():
+        yield boto3.client("s3", region_name="us-east-1")
+
+
+@pytest.fixture
+def s3_bucket(s3):
+    s3.create_bucket(Bucket=settings.AWS_BUCKET_NAME)
+    yield settings.AWS_BUCKET_NAME
+
+
+@pytest.fixture
+def s3_consultation_1(s3_bucket, s3):
+    code = "consultation_1"
+    s3.put_object(Body=b"", Bucket=s3_bucket, Key=f"app_data/consultations/{code}/")
+    yield code

@@ -17,7 +17,7 @@ class ConsultationViewSet(ModelViewSet):
     serializer_class = ConsultationSerializer
     permission_classes = [IsAuthenticated]
     filterset_fields = ["slug"]
-    http_method_names = ["get", "patch"]
+    http_method_names = ["get", "patch", "post"]
 
     def get_queryset(self):
         return models.Consultation.objects.filter(users=self.request.user).order_by("-created_at")
@@ -28,6 +28,11 @@ class ConsultationViewSet(ModelViewSet):
         if not consultation.users.filter(pk=self.request.user.pk).exists():
             raise PermissionDenied("You don't have permission to access this object.")
 
+        return consultation
+
+    def perform_create(self, serializer):
+        consultation = serializer.save()
+        consultation.users.add(self.request.user)
         return consultation
 
     # permission_classes=[CanSeeConsultation]

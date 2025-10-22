@@ -3,11 +3,43 @@ from uuid import uuid4
 import pytest
 from django.urls import reverse
 
+from consultation_analyser.consultations.models import Consultation
 from consultation_analyser.factories import RespondentFactory
 
 
 @pytest.mark.django_db
 class TestConsultationViewSet:
+    def test_create_consultation(
+        self, client, consultation_user, consultation_user_token, s3_consultation_1
+    ):
+        """Test API endpoint can create a consultation"""
+        url = reverse(
+            "consultations-list",
+        )
+        response = client.post(
+            url,
+            data={"title": "my consultation", "code": s3_consultation_1},
+            headers={"Authorization": f"Bearer {consultation_user_token}"},
+        )
+
+        assert response.status_code == 201, response.json()
+        assert response.json()["users"] == [consultation_user.email]
+        assert Consultation.objects.filter(pk=response.json()["id"]).exists()
+
+    def test_create_consultation_bucket_not_found(
+        self, client, consultation_user_token, s3_consultation_1
+    ):
+        """Test API endpoint can create a consultation"""
+        url = reverse("consultations-list")
+        response = client.post(
+            url,
+            data={"title": "my consultation", "code": "another_consultation"},
+            headers={"Authorization": f"Bearer {consultation_user_token}"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["code"] == ["another_consultation not found in s3"]
+
     def test_get_demographic_options_empty(
         self, client, consultation_user_token, free_text_question
     ):
