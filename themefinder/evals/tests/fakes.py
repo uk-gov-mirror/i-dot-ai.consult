@@ -87,6 +87,7 @@ class FakeRunnerPort(RunnerPort):
         events: list[str] | None = None,
         error: Exception | None = None,
     ):
+        super().__init__()
         self.report = report
         self.events = events
         self.error = error
