@@ -32,6 +32,7 @@ export enum Suffixes {
   Answers = "answers",
   Dashboard = "dashboard",
   SelectProvider = "select-provider",
+  ReviewQuestions = "review-questions",
 }
 
 export enum Routes {
@@ -79,6 +80,21 @@ export const getApiConsultationsRootUrl = () => {
 
 export const getApiConsultationV2Url = (consultationId: string) => {
   return urlJoin(getApiConsultationsRootUrl(), consultationId, "/");
+};
+
+export const getApiQuestionsV2Url = (consultationId: string) => {
+  return urlJoin(
+    getApiConsultationV2Url(consultationId),
+    Suffixes.Questions,
+    "/",
+  );
+};
+
+export const getApiQuestionV2Url = (
+  consultationId: string,
+  questionId: string,
+) => {
+  return urlJoin(getApiQuestionsV2Url(consultationId), questionId, "/");
 };
 
 export const getConsultationViewUrl = (consultationId: string) => {
@@ -627,5 +643,14 @@ export const getDataUploadSelectProviderUrl = (consultationId: string) => {
     consultationId,
     Suffixes.DataUpload,
     Suffixes.SelectProvider,
+  );
+};
+
+export const getDataUploadReviewQuestionsUrl = (consultationId: string) => {
+  return urlJoin(
+    Routes.Consultations,
+    consultationId,
+    Suffixes.DataUpload,
+    Suffixes.ReviewQuestions,
   );
 };
