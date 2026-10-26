@@ -2,6 +2,7 @@
   import Alert from "../../Alert/Alert.svelte";
   import Button from "../../inputs/Button/Button.svelte";
   import Checkbox from "../../inputs/Checkbox/Checkbox.svelte";
+  import LinkButton from "../../inputs/LinkButton/LinkButton.svelte";
   import Modal from "../../Modal/Modal.svelte";
   import StepTitle from "../StepTitle/StepTitle.svelte";
   import Delete from "../../svg/material/Delete.svelte";
@@ -15,6 +16,7 @@
   } from "../../../global/queries/questions";
   import {
     getDataUploadUrl,
+    getDataUploadReviewQuestionsUrl,
     getApiQuestionResponsesUrl,
   } from "../../../global/routes";
   import type { Question } from "../../../global/types";
@@ -202,16 +204,17 @@
               <p class="text-[15px] text-neutral-900">
                 {question.question_text}
               </p>
-              <Button
-                size="sm"
-                variant="ghost"
+              <LinkButton
+                ariaExpanded={expandedIds.has(question.id)}
                 handleClick={() => toggleExpanded(question)}
               >
                 {expandedIds.has(question.id) ? "Hide answers" : "Show answers"}
-              </Button>
+              </LinkButton>
 
               {#if expandedIds.has(question.id)}
-                <div class="mt-3 text-sm text-neutral-500">
+                <div
+                  class="mt-3 rounded-lg bg-neutral-100 p-3 text-sm text-neutral-500"
+                >
                   {#if question.has_free_text && !question.has_multiple_choice}
                     {#if freeTextFailed.has(question.id)}
                       No answers for this question.
@@ -220,12 +223,16 @@
                     {:else if freeTextSamples.get(question.id)!.length === 0}
                       No answers for this question.
                     {:else}
-                      <p class="mb-2">
+                      <p class="mb-1.5 text-xs">
                         A sample. {freeTextSamples.get(question.id)!.length} of {question.free_text_response_count}
                         answers to this question
                       </p>
                       {#each freeTextSamples.get(question.id)! as text, i (i)}
-                        <p>{text}</p>
+                        <p
+                          class="leading-relaxed text-neutral-900 not-last:mb-2"
+                        >
+                          {text}
+                        </p>
                       {/each}
                     {/if}
                   {:else if question.total_response_count === 0}
@@ -233,12 +240,14 @@
                   {:else}
                     {@const sample =
                       question.multiple_choice_answer?.slice(0, 3) ?? []}
-                    <p class="mb-2">
+                    <p class="mb-1.5 text-xs">
                       A sample. {sample.length} of {question.total_response_count}
                       answers to this question
                     </p>
                     {#each sample as answer (answer.id)}
-                      <p>{answer.text}</p>
+                      <p class="leading-relaxed text-neutral-900 not-last:mb-2">
+                        {answer.text}
+                      </p>
                     {/each}
                   {/if}
                 </div>
@@ -255,8 +264,11 @@
   <Button size="sm" href={getDataUploadUrl(consultationId)}>
     Back to overview
   </Button>
-  <Button size="sm" variant="primary" href="step-5">
-    <!-- TODO: Replace with getDataUploadReviewQuestionsUrl(consultationId) once step 5 is built -->
+  <Button
+    size="sm"
+    variant="primary"
+    href={getDataUploadReviewQuestionsUrl(consultationId)}
+  >
     Continue to review questions
   </Button>
 </div>
