@@ -30,7 +30,7 @@ from pydantic.dataclasses import dataclass
 # function is an lru_cache singleton anyway and allows tests to change env variables.
 dotenv.load_dotenv()
 
-# Just a single valid value for THEMEFINDER_EVAL_ENGINE at the moment, but allows for future expansion.
+# "local" runs cases sequentially in-process, with no native eval engine.
 EvalRunnerSource = Literal["pydantic_evals", "local"]
 EvalBackendSource = Literal["langfuse", "local"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]

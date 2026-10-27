@@ -17,6 +17,7 @@ from adapters.datasets import (
     LocalJSONDatasetAdapter,
 )
 from adapters.runners import RunnerPort
+from adapters.runners.inline_sequential_runner import InlineSequentialRunner
 from adapters.runners.pydantic_evals_runner import PydanticEvalsRunner
 from datasets import DatasetConfig
 from settings import EvalSettings, get_settings
@@ -78,6 +79,7 @@ ARTEFACT_FACTORIES: dict[str, ArtefactFactory] = {
 }
 RUNNER_FACTORIES: dict[str, RunnerFactory] = {
     "pydantic_evals": PydanticEvalsRunner,
+    "local": InlineSequentialRunner,
 }
 
 
